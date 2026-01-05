@@ -1,37 +1,37 @@
-# AI Photo Site - Biyometrik Fotoğraf Kontrol Sistemi
+# AI Photo Site - Biometric Photo Quality Control System
 
-Modern, AI destekli biyometrik fotoğraf kontrol ve analiz platformu. FastAPI, OpenCV ve MediaPipe kullanarak fotoğraf kalitesini otomatik olarak değerlendirir.
+A modern, AI-powered biometric photo quality control and analysis platform. Automatically evaluates photo quality using FastAPI, OpenCV, and MediaPipe.
 
-## ✨ Özellikler
+## Features
 
-- 📸 **Fotoğraf Yükleme**: JPG, PNG, WEBP formatlarında fotoğraf yükleme
-- 🤖 **AI Analiz**: OpenCV ve MediaPipe ile otomatik görüntü analizi
-- ✅ **Kalite Kontrolü**: Yüz tespiti, bulanıklık, parlaklık ve kadraj kontrolü
-- 🎨 **Modern UI**: PhotoAid benzeri modal akış ve gerçek zamanlı progress gösterimi
-- ⚡ **Gerçek Zamanlı İşleme**: Background task'lar ile asenkron analiz
-- 📊 **Detaylı Raporlama**: PASS/FAIL sonuçları ve nedenleri
+- Photo Upload: Support for JPG, PNG, and WEBP formats
+- AI Analysis: Automatic image analysis using OpenCV and MediaPipe
+- Quality Control: Face detection, blur detection, brightness analysis, and framing validation
+- Modern UI: PhotoAid-style modal flow with real-time progress indicators
+- Real-time Processing: Asynchronous analysis using background tasks
+- Detailed Reporting: PASS/FAIL results with specific reasons
 
-## 🚀 Hızlı Başlangıç
+## Quick Start
 
-### Gereksinimler
+### Requirements
 
 - Python 3.8+
 - pip
 
-### Kurulum
+### Installation
 
-1. **Repository'yi klonlayın:**
+1. **Clone the repository:**
 ```bash
 git clone <repository-url>
 cd ai-photo-site
 ```
 
-2. **Virtual environment oluşturun:**
+2. **Create a virtual environment:**
 ```bash
 python -m venv .venv
 ```
 
-3. **Virtual environment'ı aktifleştirin:**
+3. **Activate the virtual environment:**
 ```bash
 # macOS/Linux
 source .venv/bin/activate
@@ -40,93 +40,93 @@ source .venv/bin/activate
 .venv\Scripts\activate
 ```
 
-4. **Bağımlılıkları yükleyin:**
+4. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-**Not:** MediaPipe kurulumunda sorun yaşarsanız, sisteminizde gerekli bağımlılıkların yüklü olduğundan emin olun.
+**Note:** If you encounter issues installing MediaPipe, ensure all required system dependencies are installed.
 
-### Çalıştırma
+### Running the Application
 
 ```bash
 uvicorn app:app --reload
 ```
 
-Uygulama `http://localhost:8000` adresinde çalışacaktır.
+The application will be available at `http://localhost:8000`.
 
-## 📁 Proje Yapısı
+## Project Structure
 
 ```
 ai-photo-site/
-├── app.py                 # FastAPI ana uygulama
-├── requirements.txt        # Python bağımlılıkları
-├── README.md             # Bu dosya
-├── .gitignore            # Git ignore kuralları
-├── templates/            # Jinja2 HTML şablonları
-│   ├── index.html        # Ana sayfa
-│   ├── job.html          # Job durum sayfası
+├── app.py                 # FastAPI main application
+├── requirements.txt       # Python dependencies
+├── README.md             # This file
+├── .gitignore            # Git ignore rules
+├── templates/            # Jinja2 HTML templates
+│   ├── index.html        # Main page
+│   ├── job.html         # Job status page
 │   └── ...
-├── static/               # Statik dosyalar (CSS, JS)
-│   ├── styles.css        # Özel stiller
-│   └── app.js            # Frontend JavaScript
-└── uploads/              # Yüklenen fotoğraflar (gitignore)
+├── static/               # Static files (CSS, JS)
+│   ├── styles.css       # Custom styles
+│   └── app.js           # Frontend JavaScript
+└── uploads/              # Uploaded photos (gitignore)
 ```
 
-## 🎯 Kullanım
+## Usage
 
-1. Tarayıcıda `http://localhost:8000` adresini açın
-2. "Başlamadan Önce" butonuna tıklayarak kuralları okuyun
-3. Bir fotoğraf seçin ve "Fotoğraf Yükle" butonuna tıklayın
-4. Processing ekranında AI analizini izleyin
-5. Sonuç ekranında PASS/FAIL durumunu ve detayları görüntüleyin
+1. Open `http://localhost:8000` in your browser
+2. Click "Before You Start" to read the guidelines
+3. Select a photo and click "Upload Photo"
+4. Watch the AI analysis progress in real-time
+5. View PASS/FAIL status and detailed results
 
-## 🔍 Analiz Kriterleri
+## Analysis Criteria
 
-### PASS Kriterleri
-- ✅ Tek yüz tespit edildi
-- ✅ Yüz net ve odakta
-- ✅ Yeterli aydınlatma
-- ✅ Uygun kadraj
+### PASS Criteria
+- Single face detected
+- Face is sharp and in focus
+- Adequate lighting
+- Proper framing
 
-### FAIL Kriterleri (AI ile düzeltilemez)
-- ❌ Yüz tespit edilemedi
-- ❌ Birden fazla yüz var
-- ❌ Fotoğraf çok bulanık
-- ❌ Yüz çok karanlık veya aşırı parlak
-- ❌ Yüz kadrajı uygun değil
+### FAIL Criteria (Cannot be fixed by AI)
+- No face detected
+- Multiple faces in photo
+- Photo is too blurry
+- Face is too dark or overexposed
+- Face framing is inappropriate
 
-### Otomatik Düzeltilen (Kullanıcıya gösterilmez)
-- 🔧 Arka plan beyazlaştırma
-- 🔧 Oran düzeltme (50x60mm)
-- 🔧 Işık dengesi
-- 🔧 Küçük eğim düzeltmeleri
+### Automatically Fixed (Not shown to user)
+- Background replacement (white background)
+- Aspect ratio correction (50x60mm)
+- Exposure balance
+- Minor tilt corrections
 
-## 🛠️ Teknolojiler
+## Technology Stack
 
-- **Backend:**
-  - FastAPI - Modern Python web framework
-  - OpenCV - Görüntü işleme
-  - MediaPipe - Yüz tespiti
-  - NumPy - Sayısal hesaplamalar
+**Backend:**
+- FastAPI - Modern Python web framework
+- OpenCV - Image processing
+- MediaPipe - Face detection
+- NumPy - Numerical computations
 
-- **Frontend:**
-  - HTML5 / CSS3
-  - JavaScript (Vanilla)
-  - Tailwind CSS - Utility-first CSS framework
-  - Jinja2 - Template engine
+**Frontend:**
+- HTML5 / CSS3
+- JavaScript (Vanilla)
+- Tailwind CSS - Utility-first CSS framework
+- Jinja2 - Template engine
 
-## 📝 API Endpoints
+## API Endpoints
 
-- `GET /` - Ana sayfa
-- `POST /upload` - Fotoğraf yükleme
-- `GET /job/{job_id}` - Job durum sayfası
-- `GET /job/{job_id}/status` - Job durumu (JSON)
-- `GET /uploads` - Yüklenen dosyalar listesi
+- `GET /` - Main page
+- `POST /upload` - Photo upload
+- `GET /job/{job_id}` - Job status page
+- `GET /job/{job_id}/status` - Job status (JSON)
+- `GET /uploads` - Uploaded files list
 
-## 🔧 Yapılandırma
+## Configuration
 
-Analiz eşik değerleri `app.py` dosyasında ayarlanabilir:
+Analysis threshold values can be adjusted in `app.py`:
 
 ```python
 FACE_BLUR_THRESHOLD = 50.0
@@ -137,22 +137,22 @@ FACE_RATIO_MAX_UNRECOVERABLE = 0.60
 MIN_RESOLUTION = 400 * 400
 ```
 
-## 📄 Lisans
+## License
 
-Bu proje özel bir projedir.
+This is a private project.
 
-## 👥 Katkıda Bulunma
+## Contributing
 
-1. Fork edin
-2. Feature branch oluşturun (`git checkout -b feature/amazing-feature`)
-3. Commit edin (`git commit -m 'Add some amazing feature'`)
-4. Push edin (`git push origin feature/amazing-feature`)
-5. Pull Request açın
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 📞 İletişim
+## Contact
 
-Sorularınız için issue açabilirsiniz.
+For questions, please open an issue.
 
 ---
 
-**Not:** Bu proje geliştirme aşamasındadır. Production kullanımı için ek testler ve optimizasyonlar gerekebilir.
+**Note:** This project is under active development. Additional testing and optimization may be required for production use.
