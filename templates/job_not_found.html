@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Bulunamadı - Biyometrik Fotoğraf Kontrol</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-lg shadow-lg p-8 max-w-md w-full text-center">
+        <div class="text-4xl mb-4">❌</div>
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">Job Bulunamadı</h1>
+        <p class="text-gray-600 mb-4">
+            Job ID: <span class="font-mono text-sm">{{ job_id }}</span>
+        </p>
+        <p class="text-gray-600 mb-6">
+            Belirtilen job ID bulunamadı. Lütfen geçerli bir job ID kullanın.
+        </p>
+        <a href="/" class="inline-block px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition duration-200">
+            Ana Sayfaya Dön
+        </a>
+    </div>
+</body>
+</html>
+

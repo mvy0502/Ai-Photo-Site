@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Photo Site - Yüklenen Dosyalar</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .stats {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            display: flex;
+            justify-content: space-around;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #007bff;
+            color: white;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .filename {
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .size {
+            color: #666;
+        }
+        .no-files {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        a {
+            color: #007bff;
+            text-decoration: none;
+            display: inline-block;
+            margin: 0 10px;
+            padding: 10px 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        a:hover {
+            background-color: #e9ecef;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Yüklenen Dosyalar</h1>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value">{{ total_files }}</div>
+                <div class="stat-label">Toplam Dosya</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value">{{ total_size_mb }} MB</div>
+                <div class="stat-label">Toplam Boyut</div>
+            </div>
+        </div>
+
+        {% if files %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Dosya Adı</th>
+                    <th>Boyut</th>
+                    <th>Yüklenme Tarihi</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for file in files %}
+                <tr>
+                    <td class="filename">{{ file.filename }}</td>
+                    <td class="size">{{ file.size_mb }} MB</td>
+                    <td>{{ file.modified }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="no-files">
+            <p>Henüz dosya yüklenmemiş.</p>
+        </div>
+        {% endif %}
+
+        <div class="actions">
+            <a href="/">Yeni Fotoğraf Yükle</a>
+            <a href="/uploads">Sayfayı Yenile</a>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
+

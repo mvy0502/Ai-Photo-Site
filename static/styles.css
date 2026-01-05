@@ -1,0 +1,500 @@
+/* Custom styles for AI Photo Site - Modal Wizard */
+
+/* Modal Overlay */
+#wizardModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#wizardModal.hidden {
+    display: none;
+}
+
+#wizardOverlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Modal Kutu */
+#wizardModal > div:last-child {
+    position: relative;
+    background: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    max-width: 720px;
+    width: 100%;
+    margin: 0 1rem;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+    #wizardModal > div:last-child {
+        margin: 0 0.5rem;
+        max-height: 95vh;
+    }
+}
+
+/* Buton Stilleri */
+/* Primary Button (Mavi) */
+#wizardModal .btn-primary,
+#wizardModal button[id="nextBtn"],
+#wizardModal button[id="uploadPhotoBtn"] {
+    background-color: #2563eb;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    border: none;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+#wizardModal .btn-primary:hover,
+#wizardModal button[id="nextBtn"]:hover,
+#wizardModal button[id="uploadPhotoBtn"]:hover {
+    background-color: #1d4ed8;
+}
+
+/* Secondary Button (Beyaz) */
+#wizardModal .btn-secondary,
+#wizardModal button[id="prevBtn"] {
+    background-color: white;
+    color: #374151;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    border: 1px solid #e5e7eb;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+#wizardModal .btn-secondary:hover,
+#wizardModal button[id="prevBtn"]:hover {
+    background-color: #f9fafb;
+}
+
+/* Fotoğraf Çek Butonu (Yeşil) */
+#wizardModal button[id="takePhotoBtn"] {
+    background-color: #16a34a;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    border: none;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+#wizardModal button[id="takePhotoBtn"]:hover {
+    background-color: #15803d;
+}
+
+/* Bullets Listesi */
+#wizardStepContent ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+#wizardStepContent ul li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+#wizardStepContent ul li span {
+    color: #3b82f6;
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+}
+
+#wizardStepContent ul li p {
+    color: #374151;
+    margin: 0;
+    line-height: 1.5;
+}
+
+/* Badge Stilleri */
+#wizardStepContent span[class*="badge"],
+#wizardStepContent .badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    border-radius: 0.25rem;
+    font-weight: 500;
+}
+
+/* Must Avoid Badge (Kırmızı) */
+#wizardStepContent .badge-warning,
+#wizardStepContent .badge-danger {
+    background-color: #fee2e2;
+    color: #991b1b;
+}
+
+/* Automatic Fixes Badge (Mavi/Yeşil) */
+#wizardStepContent .badge-info,
+#wizardStepContent .badge-success {
+    background-color: #dbeafe;
+    color: #1e40af;
+}
+
+/* Step Dots */
+#stepIndicator {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+#stepIndicator > div {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #d1d5db;
+    transition: background-color 0.2s;
+}
+
+/* Aktif Step Dot (Mavi) */
+#stepIndicator > div.active,
+#stepIndicator > div[class*="bg-blue"] {
+    background-color: #2563eb;
+}
+
+/* Job Page Styles */
+.passCard {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: #f0fdf4;
+    padding: 16px;
+    border-radius: 12px;
+}
+
+.failCard {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: #fef2f2;
+    padding: 16px;
+    border-radius: 12px;
+}
+
+.cardTitle {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.cardText {
+    color: #374151;
+    margin-top: 6px;
+}
+
+.reasonsList li {
+    margin: 6px 0;
+}
+
+/* ============================================================================
+   Processing Modal (PhotoAid style)
+   ============================================================================ */
+#processingModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#processingModal.hidden {
+    display: none;
+}
+
+#processingOverlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+#processingModal > div:last-child {
+    position: relative;
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    max-width: 56rem;
+    width: 100%;
+    margin: 0 1rem;
+    max-height: 90vh;
+    overflow: hidden;
+}
+
+@media (max-width: 768px) {
+    #processingModal > div:last-child {
+        margin: 0 0.5rem;
+        max-height: 95vh;
+    }
+    
+    #processingModal .flex-col.md\:flex-row {
+        flex-direction: column;
+    }
+}
+
+/* Progress Steps */
+#progressSteps {
+    min-height: 200px;
+}
+
+#progressSteps .flex {
+    transition: all 0.3s ease;
+}
+
+/* ============================================================================
+   AI Hologram Sweep Animation (Özgün Tasarım)
+   ============================================================================ */
+.previewStage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #eef2f7;
+}
+
+#previewImage,
+#resultPreviewImage {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transform: translateZ(0);
+}
+
+.aiOverlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.aiOverlay--active {
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+.aiOverlay--paused .aiNoise {
+    animation-play-state: paused;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+}
+
+.aiGrid {
+    position: absolute;
+    inset: -20%;
+    background-image:
+        linear-gradient(to right, rgba(16, 185, 129, 0.10) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(16, 185, 129, 0.10) 1px, transparent 1px);
+    background-size: 42px 42px;
+    opacity: 0.22;
+    transform: rotate(-6deg) scale(1.05);
+    filter: blur(0.2px);
+}
+
+/* Scan Band: Yeşil lightsaber ucu efekti */
+.scanBand {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(34, 197, 94, 0.3) 20%,
+        rgba(34, 197, 94, 0.9) 50%,
+        rgba(34, 197, 94, 0.3) 80%,
+        transparent 100%
+    );
+    box-shadow: 
+        0 0 10px rgba(34, 197, 94, 0.8),
+        0 0 20px rgba(34, 197, 94, 0.6),
+        0 0 30px rgba(34, 197, 94, 0.4),
+        inset 0 0 10px rgba(34, 197, 94, 0.5);
+    border: none;
+    filter: blur(0.5px);
+    mix-blend-mode: screen;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 0.35s ease;
+    pointer-events: none;
+}
+
+.scanBand.fadeOut {
+    opacity: 0;
+    transition: opacity 0.35s ease;
+}
+
+/* Hafif noise shimmer (özgün dokunuş) */
+.aiNoise {
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.00) 0px,
+        rgba(255, 255, 255, 0.00) 2px,
+        rgba(255, 255, 255, 0.03) 3px
+    );
+    opacity: 0.22;
+    mix-blend-mode: overlay;
+    animation: aiNoiseFlicker 1.0s steps(2) infinite;
+}
+
+@keyframes aiNoiseFlicker {
+    0% {
+        transform: translateY(0);
+        opacity: 0.14;
+    }
+    50% {
+        transform: translateY(2%);
+        opacity: 0.20;
+    }
+    100% {
+        transform: translateY(0);
+        opacity: 0.14;
+    }
+}
+
+/* Rehber çerçeve: 50x60 hissi */
+.guideFrame {
+    position: absolute;
+    left: 18%;
+    top: 10%;
+    width: 64%;
+    height: 80%;
+    border: 2px dashed rgba(15, 23, 42, 0.25);
+    border-radius: 14px;
+    box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.08);
+}
+
+
+/* ============================================================================
+   Result Modal (Checklist Screen)
+   ============================================================================ */
+#resultModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#resultModal.hidden {
+    display: none;
+}
+
+#resultOverlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+#resultModal > div:last-child {
+    position: relative;
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    max-width: 56rem;
+    width: 100%;
+    margin: 0 1rem;
+    max-height: 90vh;
+    overflow: hidden;
+}
+
+@media (max-width: 768px) {
+    #resultModal > div:last-child {
+        margin: 0 0.5rem;
+        max-height: 95vh;
+    }
+    
+    #resultModal .flex-col.md\:flex-row {
+        flex-direction: column;
+    }
+}
+
+/* Checklist Items */
+#checklistContainer .flex {
+    transition: all 0.2s ease;
+}
+
+#checklistContainer .flex:hover {
+    transform: translateX(4px);
+}
+
+/* Frame Preview with Overlay */
+#resultPreviewContainer {
+    position: relative;
+}
+
+/* SVG Overlay */
+#resultOverlayFrame svg {
+    pointer-events: none;
+}
+
+/* Button Styles */
+#retakePhotoBtn,
+#continueBtn {
+    transition: all 0.2s ease;
+}
+
+#retakePhotoBtn:hover,
+#continueBtn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+#continueBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Animations */
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* Smooth transitions */
+#processingModal,
+#resultModal,
+#wizardModal {
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
