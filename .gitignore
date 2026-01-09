@@ -8,9 +8,11 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
 
-# Uploads
+# Uploads & Images
 uploads/
+outputs/
 *.jpg
 *.jpeg
 *.png
@@ -29,11 +31,22 @@ Thumbs.db
 
 # Logs
 *.log
+server.log
 
 # Environment variables
 .env
-.env.local
+.env.*
+!.env.example
 
-# Test files
-test_upload.py
+# Test results
+test_results/
+test_results_photo_test/
 
+# Backup files
+*.bak
+*.backup
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

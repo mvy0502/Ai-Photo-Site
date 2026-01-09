@@ -1,158 +1,155 @@
-# AI Photo Site - Biometric Photo Quality Control System
+# 🇹🇷 BiyometrikFoto.tr
 
-A modern, AI-powered biometric photo quality control and analysis platform. Automatically evaluates photo quality using FastAPI, OpenCV, and MediaPipe.
+Türkiye standartlarına uygun biyometrik fotoğraf hazırlama servisi. Pasaport, vize ve resmi belgeler için kabul garantili fotoğraf.
 
-## Features
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-- Photo Upload: Support for JPG, PNG, and WEBP formats
-- AI Analysis: Automatic image analysis using OpenCV and MediaPipe
-- Quality Control: Face detection, blur detection, brightness analysis, and framing validation
-- Modern UI: PhotoAid-style modal flow with real-time progress indicators
-- Real-time Processing: Asynchronous analysis using background tasks
-- Detailed Reporting: PASS/FAIL results with specific reasons
+## ✨ Özellikler
 
-## Quick Start
+- 🤖 **AI Analiz** - MediaPipe ile yüz tespiti ve biyometrik kontroller
+- 🖼️ **Arka Plan Kaldırma** - PhotoRoom API ile profesyonel beyaz arka plan
+- 📐 **Türkiye Standartları** - 50×60mm, 300 DPI, ICAO uyumlu
+- 💳 **Ödeme Entegrasyonu** - Stripe ile güvenli ödeme (opsiyonel)
+- 📧 **E-posta Gönderimi** - İndirme linki e-posta ile
+- 🗄️ **Veritabanı** - Supabase PostgreSQL ile kalıcı depolama
 
-### Requirements
+## 🚀 Hızlı Başlangıç
 
-- Python 3.8+
-- pip
+### Gereksinimler
 
-### Installation
+- Python 3.11+
+- PostgreSQL (Supabase önerilir)
+- PhotoRoom API anahtarı
 
-1. **Clone the repository:**
+### Kurulum
+
 ```bash
-git clone <repository-url>
-cd ai-photo-site
-```
+# Repo'yu klonla
+git clone https://github.com/mvy0502/Ai-Photo-Site.git
+cd Ai-Photo-Site
 
-2. **Create a virtual environment:**
-```bash
+# Virtual environment
 python -m venv .venv
-```
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-3. **Activate the virtual environment:**
-```bash
-# macOS/Linux
-source .venv/bin/activate
-
-# Windows
-.venv\Scripts\activate
-```
-
-4. **Install dependencies:**
-```bash
+# Bağımlılıklar
 pip install -r requirements.txt
-```
 
-**Note:** If you encounter issues installing MediaPipe, ensure all required system dependencies are installed.
+# Environment variables
+cp CONFIG_TEMPLATE.md .env
+# .env dosyasını düzenle
 
-### Running the Application
+# Veritabanı şeması
+python scripts/apply_schema.py
 
-```bash
+# Sunucuyu başlat
 uvicorn app:app --reload
 ```
 
-The application will be available at `http://localhost:8000`.
+### Environment Variables
 
-## Project Structure
+```env
+# Zorunlu
+DATABASE_URL=postgresql://...
+PHOTOROOM_API_KEY=sk_...
 
-```
-ai-photo-site/
-├── app.py                 # FastAPI main application
-├── requirements.txt       # Python dependencies
-├── README.md             # This file
-├── .gitignore            # Git ignore rules
-├── templates/            # Jinja2 HTML templates
-│   ├── index.html        # Main page
-│   ├── job.html         # Job status page
-│   └── ...
-├── static/               # Static files (CSS, JS)
-│   ├── styles.css       # Custom styles
-│   └── app.js           # Frontend JavaScript
-└── uploads/              # Uploaded photos (gitignore)
-```
+# Opsiyonel (Ödeme)
+STRIPE_SECRET_KEY=sk_...
+STRIPE_PUBLISHABLE_KEY=pk_...
+STRIPE_WEBHOOK_SECRET=whsec_...
 
-## Usage
-
-1. Open `http://localhost:8000` in your browser
-2. Click "Before You Start" to read the guidelines
-3. Select a photo and click "Upload Photo"
-4. Watch the AI analysis progress in real-time
-5. View PASS/FAIL status and detailed results
-
-## Analysis Criteria
-
-### PASS Criteria
-- Single face detected
-- Face is sharp and in focus
-- Adequate lighting
-- Proper framing
-
-### FAIL Criteria (Cannot be fixed by AI)
-- No face detected
-- Multiple faces in photo
-- Photo is too blurry
-- Face is too dark or overexposed
-- Face framing is inappropriate
-
-### Automatically Fixed (Not shown to user)
-- Background replacement (white background)
-- Aspect ratio correction (50x60mm)
-- Exposure balance
-- Minor tilt corrections
-
-## Technology Stack
-
-**Backend:**
-- FastAPI - Modern Python web framework
-- OpenCV - Image processing
-- MediaPipe - Face detection
-- NumPy - Numerical computations
-
-**Frontend:**
-- HTML5 / CSS3
-- JavaScript (Vanilla)
-- Tailwind CSS - Utility-first CSS framework
-- Jinja2 - Template engine
-
-## API Endpoints
-
-- `GET /` - Main page
-- `POST /upload` - Photo upload
-- `GET /job/{job_id}` - Job status page
-- `GET /job/{job_id}/status` - Job status (JSON)
-- `GET /uploads` - Uploaded files list
-
-## Configuration
-
-Analysis threshold values can be adjusted in `app.py`:
-
-```python
-FACE_BLUR_THRESHOLD = 50.0
-FACE_BRIGHTNESS_MIN = 50.0
-FACE_BRIGHTNESS_MAX = 240.0
-FACE_RATIO_MIN_UNRECOVERABLE = 0.05
-FACE_RATIO_MAX_UNRECOVERABLE = 0.60
-MIN_RESOLUTION = 400 * 400
+# Opsiyonel (E-posta)
+SMTP_HOST=smtp.gmail.com
+SMTP_USER=...
+SMTP_PASS=...
+EMAIL_FROM=...
 ```
 
-## License
+## 📁 Proje Yapısı
 
-This is a private project.
+```
+├── app.py                 # Ana FastAPI uygulaması
+├── requirements.txt       # Python bağımlılıkları
+├── render.yaml           # Render deployment config
+├── DEPLOY.md             # Deployment rehberi
+├── CONFIG_TEMPLATE.md    # Environment template
+│
+├── utils/                # Yardımcı modüller
+│   ├── analyze_v2.py     # V2 biyometrik analiz
+│   ├── photoroom_client.py # PhotoRoom API
+│   ├── db.py             # Veritabanı bağlantısı
+│   ├── db_jobs.py        # Job CRUD işlemleri
+│   ├── payment.py        # Stripe entegrasyonu
+│   └── email_service.py  # E-posta servisi
+│
+├── static/               # Frontend dosyaları
+│   ├── app.js           # JavaScript
+│   ├── styles.css       # CSS
+│   └── images/          # Görseller
+│
+├── templates/            # Jinja2 templates
+│   ├── index.html       # Ana sayfa
+│   ├── payment_success.html
+│   └── payment_cancel.html
+│
+├── sql/                  # Veritabanı
+│   └── schema.sql       # Tablo tanımları
+│
+├── scripts/              # Yardımcı scriptler
+│   ├── apply_schema.py  # Şema uygulama
+│   └── cleanup_jobs.py  # Eski job temizliği
+│
+├── models/               # ML modelleri
+│   ├── face_landmarker.task
+│   └── selfie_segmenter.tflite
+│
+└── tests/                # Test dosyaları
+```
 
-## Contributing
+## 🔧 API Endpoints
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+| Endpoint | Method | Açıklama |
+|----------|--------|----------|
+| `/` | GET | Ana sayfa |
+| `/upload` | POST | Fotoğraf yükleme |
+| `/job/{id}/status` | GET | İş durumu |
+| `/process/{id}` | POST | PhotoRoom işleme |
+| `/api/download/{id}` | GET | Güvenli indirme |
+| `/api/health` | GET | Sağlık kontrolü |
+| `/api/health/db` | GET | DB sağlık kontrolü |
 
-## Contact
+## 🌐 Deployment
 
-For questions, please open an issue.
+Detaylı deployment rehberi için: [DEPLOY.md](DEPLOY.md)
+
+### Render (Önerilen)
+
+```bash
+# render.yaml otomatik algılanır
+# Dashboard'dan environment variables ekle
+```
+
+### Docker (Yakında)
+
+```bash
+docker build -t biyometrikfoto .
+docker run -p 8000:8000 biyometrikfoto
+```
+
+## 📄 Lisans
+
+MIT License - Detaylar için [LICENSE](LICENSE) dosyasına bakın.
+
+## 🤝 Katkıda Bulunma
+
+1. Fork yapın
+2. Feature branch oluşturun (`git checkout -b feature/amazing`)
+3. Commit yapın (`git commit -m 'Add amazing feature'`)
+4. Push yapın (`git push origin feature/amazing`)
+5. Pull Request açın
 
 ---
 
-**Note:** This project is under active development. Additional testing and optimization may be required for production use.
+**BiyometrikFoto.tr** - Türkiye'nin biyometrik fotoğraf servisi 🇹🇷
