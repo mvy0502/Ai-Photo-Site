@@ -204,15 +204,17 @@ def _format_job_response(db_job: dict) -> dict:
 # Templates klasörünü ayarla
 templates = Jinja2Templates(directory="templates")
 
+# ============================================================================
+# Create runtime directories (Render fresh container needs these)
+# ============================================================================
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("outputs", exist_ok=True)
+
 # Static dosyaları mount et
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Uploads klasörünü serve et (preview için)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-
-# Uploads klasörünü oluştur
-if not os.path.exists("uploads"):
-    os.makedirs("uploads")
 
 # İzin verilen dosya uzantıları
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
