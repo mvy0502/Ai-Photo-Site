@@ -4,58 +4,35 @@
 services:
   - type: web
     name: biyometrikfoto-api
-    runtime: python
-    region: frankfurt  # EU region for Turkey
-    plan: starter  # or standard for production
-    
-    # Build
-    buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
-    
-    # Start command with gunicorn + uvicorn workers
-    startCommand: gunicorn app:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --access-logfile - --error-logfile -
-    
-    # Health check
+    env: python
+    region: frankfurt
+    plan: free
+
+    buildCommand: pip install -r requirements.txt
+
+    startCommand: gunicorn app:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
+
     healthCheckPath: /api/health
-    
-    # Environment variables (set in Render dashboard)
+
     envVars:
-      # Database
-      - key: DATABASE_URL
-        sync: false  # Set manually in dashboard
-      
-      # PhotoRoom API
-      - key: PHOTOROOM_API_KEY
-        sync: false
-      
-      # Stripe (optional - app works without payments if not set)
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_PUBLISHABLE_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
-      # Set to "false" to disable payments even if Stripe keys exist
-      # - key: PAYMENTS_ENABLED
-      #   value: "false"
-      
-      # Email (optional)
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: EMAIL_FROM
-        sync: false
-      
-      # App config
-      - key: DEV_ALLOW_MEMORY_FALLBACK
-        value: "false"
-      - key: JOB_TTL_DAYS
-        value: "7"
-      
-      # Python
+      - key: PYTHON_VERSION
+        value: "3.11"
+
       - key: PYTHONUNBUFFERED
         value: "1"
+
+      - key: DEV_ALLOW_MEMORY_FALLBACK
+        value: "false"
+
+      - key: PAYMENTS_ENABLED
+        value: "false"
+
+      - key: JOB_TTL_DAYS
+        value: "7"
+
+      # Set these in Render Dashboard
+      - key: DATABASE_URL
+        sync: false
+
+      - key: PHOTOROOM_API_KEY
+        sync: false
