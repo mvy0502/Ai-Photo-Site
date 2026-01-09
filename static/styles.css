@@ -373,17 +373,7 @@
     }
 }
 
-/* Rehber çerçeve: 50x60 hissi */
-.guideFrame {
-    position: absolute;
-    left: 18%;
-    top: 10%;
-    width: 64%;
-    height: 80%;
-    border: 2px dashed rgba(15, 23, 42, 0.25);
-    border-radius: 14px;
-    box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.08);
-}
+/* Guide frame removed - clean preview */
 
 
 /* ============================================================================
@@ -497,4 +487,246 @@
     to {
         opacity: 1;
     }
+}
+
+/* ============================================================================
+   Landing Page & Upload Page Styles
+   ============================================================================ */
+#landingPage,
+#uploadPage {
+    animation: fadeIn 0.3s ease-out;
+}
+
+#uploadPage.hidden,
+#landingPage.hidden {
+    display: none;
+}
+
+/* Drop Zone */
+#dropZone {
+    transition: all 0.2s ease;
+}
+
+#dropZone.hidden {
+    display: none;
+}
+
+#dropZone:hover {
+    border-color: #10b981;
+    background-color: rgba(16, 185, 129, 0.05);
+}
+
+/* Selected File Preview */
+#selectedFilePreview.hidden {
+    display: none;
+}
+
+#uploadBtn.hidden {
+    display: none;
+}
+
+/* Product Modal */
+#productModal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#productModal.hidden {
+    display: none;
+}
+
+/* Radio button styling for product selection */
+input[name="productType"]:checked + div {
+    border-color: #10b981;
+    background-color: rgba(16, 185, 129, 0.05);
+}
+
+/* Smooth scroll */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Button hover effects */
+button {
+    transition: all 0.2s ease;
+}
+
+button:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+/* Hero gradient animation */
+@keyframes gradient-shift {
+    0%, 100% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+}
+
+.animate-gradient {
+    background-size: 200% 200%;
+    animation: gradient-shift 15s ease infinite;
+}
+
+/* ============================================================================
+   Checkout Page Styles (PhotoAid-style)
+   ============================================================================ */
+
+/* Mobile sticky CTA - add bottom padding to modal content */
+@media (max-width: 1023px) {
+    #resultModal .relative.bg-white {
+        padding-bottom: 100px;
+    }
+    
+    #mobileStickyCta {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: white;
+        border-top: 1px solid #e5e7eb;
+        padding: 1rem;
+        box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
+        z-index: 60;
+    }
+}
+
+/* Hide mobile CTA on desktop */
+@media (min-width: 1024px) {
+    #mobileStickyCta {
+        display: none !important;
+    }
+}
+
+/* Checkout option cards */
+.checkout-option-card {
+    transition: all 0.2s ease;
+}
+
+.checkout-option-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.checkout-option-card.selected {
+    border-color: #10b981;
+    background-color: #ecfdf5;
+}
+
+/* Preview blur protection */
+.preview-protected {
+    filter: blur(8px);
+    transition: filter 0.3s ease;
+}
+
+.preview-unlocked {
+    filter: blur(0);
+}
+
+/* Stripe badge styling */
+.stripe-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+/* Trust badges */
+.trust-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.trust-badge svg {
+    flex-shrink: 0;
+}
+
+/* Summary card */
+.summary-card {
+    background: #f9fafb;
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+/* Line items */
+.line-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    font-size: 14px;
+}
+
+/* Total row */
+.total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 1rem;
+    margin-top: 0.5rem;
+    border-top: 2px solid #e5e7eb;
+}
+
+/* CTA button pulse animation */
+@keyframes pulse-subtle {
+    0%, 100% {
+        box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3);
+    }
+    50% {
+        box-shadow: 0 10px 20px -3px rgba(16, 185, 129, 0.4);
+    }
+}
+
+.cta-pulse {
+    animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* Radio button styling */
+input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #d1d5db;
+    border-radius: 50%;
+    outline: none;
+    cursor: pointer;
+    position: relative;
+}
+
+input[type="radio"]:checked {
+    border-color: #10b981;
+    background-color: #10b981;
+}
+
+input[type="radio"]:checked::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 8px;
+    height: 8px;
+    background: white;
+    border-radius: 50%;
+}
+
+input[type="radio"]:focus {
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
 }

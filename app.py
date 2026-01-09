@@ -1,15 +1,59 @@
-from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks, Header, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List, Optional
 import os
 import time
 import cv2
 import numpy as np
 import mediapipe as mp
+import threading
+import stripe
 from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+
+# Load environment variables
+load_dotenv()
+
+# V2 Analyzer - New contract-based analysis
+from utils.analyze_v2 import analyze_image_v2
+from utils.biometric_processor import process_biometric_photo
+from utils.photoroom_client import check_api_configuration
+
+# Payment and Email modules
+from utils.payment import (
+    create_checkout_session, verify_webhook_signature, handle_checkout_completed,
+    is_paid, get_order, create_order, update_order_state,
+    generate_signed_url, verify_signed_url, generate_email_link,
+    get_price_display, get_stripe_publishable_key,
+    STRIPE_WEBHOOK_SECRET,
+    is_payments_enabled, get_payments_config, PaymentsDisabledError
+)
+from utils.email_service import send_download_link, is_email_configured
+from utils.db import db_manager
+from utils.db_jobs import (
+    create_job_safe, get_job_safe, update_job_safe,
+    save_analysis_result, save_processed_image, update_job,
+    JobStatus, PaymentState, DatabaseError,
+    DEV_ALLOW_MEMORY_FALLBACK
+)
+
+# Feature flag for V2 analyzer
+USE_V2_ANALYZER = True
+PIPELINE_VERSION = "2.1.0-photoroom"
+
+def check_photoroom_configured() -> bool:
+    """Check if PhotoRoom API is configured."""
+    try:
+        config = check_api_configuration()
+        return config.get("api_configured", False)
+    except:
+        return False
 
 # ============================================================================
 # Threshold Configuration - Kolay ayarlanabilir değerler
@@ -34,8 +78,128 @@ MIN_SHORT_SIDE = 400  # Minimum kısa kenar (pixel)
 
 app = FastAPI()
 
-# Global job status dictionary
-job_status: dict[str, dict] = {}
+# ============================================================================
+# DATABASE STARTUP & HEALTH
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database connection on startup."""
+    success, message = await db_manager.initialize()
+    if success:
+        print(f"✅ Database: {message}")
+    else:
+        print(f"⚠️ Database: {message}")
+        print("   App will continue without database. Some features may be unavailable.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close database connections on shutdown."""
+    await db_manager.close()
+    print("🔌 Database connections closed.")
+
+@app.get("/api/health", response_class=JSONResponse)
+async def health():
+    """
+    Basic health check endpoint for load balancers and uptime monitoring.
+    Returns minimal info without exposing internals.
+    """
+    return JSONResponse({
+        "status": "ok",
+        "service": "biyometrikfoto-api",
+        "version": PIPELINE_VERSION
+    })
+
+
+@app.get("/api/health/db", response_class=JSONResponse)
+async def health_db():
+    """
+    Database health check endpoint.
+    Executes SELECT 1 and returns connection status.
+    """
+    if not db_manager.connection_info.get("connected"):
+        return JSONResponse({
+            "ok": False,
+            "error": "Database not connected",
+            "connection_info": {
+                "url_type": db_manager.connection_info.get("url_type", "unknown"),
+                "port": db_manager.connection_info.get("port"),
+            }
+        }, status_code=503)
+    
+    try:
+        success, result = await db_manager.test_connection()
+        return JSONResponse({
+            "ok": True,
+            "db": result,
+            "connection_info": {
+                "url_type": db_manager.connection_info.get("url_type"),
+                "port": db_manager.connection_info.get("port"),
+            }
+        })
+    except Exception as e:
+        # Sanitize error message
+        import re
+        error_msg = re.sub(r'://[^@]+@', '://***:***@', str(e))
+        return JSONResponse({
+            "ok": False,
+            "error": error_msg[:200],
+            "connection_info": db_manager.connection_info
+        }, status_code=503)
+
+# ============================================================================
+# JOB STATUS HELPERS
+# ============================================================================
+
+# In-memory cache for active processing jobs (cleared after analysis)
+# Only used during the brief processing window, NOT for reads
+_processing_jobs: dict[str, dict] = {}
+
+
+def _format_job_response(db_job: dict) -> dict:
+    """
+    Convert DB job record to API response format.
+    Maintains backward compatibility with frontend expectations.
+    """
+    analysis_result = db_job.get("analysis_result") or {}
+    
+    # Reconstruct preview URL from job ID
+    job_id = str(db_job.get("id", ""))
+    original_path = db_job.get("original_image_path", "")
+    
+    # Extract extension from original path
+    ext = ".jpg"
+    if original_path:
+        ext = os.path.splitext(original_path)[1] or ".jpg"
+    preview_url = f"/uploads/{job_id}{ext}" if job_id else None
+    
+    response = {
+        # Core status
+        "status": "done" if db_job.get("status") in [JobStatus.PASS, JobStatus.WARN, JobStatus.FAIL] else db_job.get("status", "processing").lower(),
+        "final_status": analysis_result.get("final_status", db_job.get("status")),
+        
+        # Issues and acknowledgement
+        "issues": analysis_result.get("issues", []),
+        "can_continue": db_job.get("can_continue", False),
+        "server_can_continue": db_job.get("can_continue", False),
+        "requires_ack_ids": db_job.get("requires_ack_ids", []),
+        "acknowledged_issue_ids": db_job.get("acknowledged_issue_ids", []),
+        
+        # Image paths
+        "preview_url": preview_url,
+        "preview_image": preview_url,
+        "normalized_url": db_job.get("normalized_image_path"),
+        "processed_url": db_job.get("processed_image_path"),
+        
+        # Payment state
+        "payment_state": db_job.get("payment_state", PaymentState.ANALYZED),
+        
+        # Merge in other analysis fields
+        **{k: v for k, v in analysis_result.items() 
+           if k not in ["issues", "final_status", "can_continue", "server_can_continue"]}
+    }
+    
+    return response
 
 # Templates klasörünü ayarla
 templates = Jinja2Templates(directory="templates")
@@ -312,33 +476,113 @@ def analyze_image(job_id: str, file_path: str) -> dict:
         }
 
 def process_job(job_id: str, saved_file_path: str):
-    """Background task - job'u işle"""
-    # Mevcut job status'u al (preview_url'yi korumak için)
-    current_status = job_status.get(job_id, {})
+    """
+    Background task - job'u işle.
+    
+    Lifecycle:
+    1. Update processing cache for frontend polling
+    2. Run analysis
+    3. Save to DB (analysis_result, status, requires_ack_ids, can_continue)
+    4. Clear processing cache (DB is now source of truth)
+    """
+    import asyncio
+    import asyncpg
+    import json
+    import re
+    
+    # Get preview URL from processing cache
+    current_status = _processing_jobs.get(job_id, {})
     preview_url = current_status.get("preview_url", None)
+        
+        # Opsiyonel gecikme (UI için)
+    time.sleep(0.5)
     
-    # Job status'u processing olarak set et (preview_url'yi koru)
-    job_status[job_id] = {
-        "status": "processing",
-        "result": None,
-        "reasons": [],
-        "preview_url": preview_url
-    }
+    # Analiz yap - V2 veya V1
+    print(f"🔵 [PIPELINE_START] Job {job_id} - Initial analysis")
     
-    # Opsiyonel gecikme (UI için)
-    time.sleep(1)
+    if USE_V2_ANALYZER:
+        print(f"🔵 [PIPELINE_BRANCH] V2_ANALYZER selected")
+        analyze_result = analyze_image_v2(job_id, saved_file_path)
+        analyze_result["analysis_source"] = "V2_ANALYZER"
+    else:
+        print(f"🔵 [PIPELINE_BRANCH] V1_ANALYZER selected (legacy)")
+        analyze_result = analyze_image(job_id, saved_file_path)
+        analyze_result["analysis_source"] = "V1_ANALYZER"
     
-    # Analiz yap
-    analyze_result = analyze_image(job_id, saved_file_path)
+    analyze_result["pipeline_version"] = PIPELINE_VERSION
     
-    # Preview URL'yi koru
+    issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
+    print(f"🔵 [FINAL_STATUS] Job {job_id} - {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+    
+    # Preview URL'yi koru (orijinal fotoğraf)
     if preview_url:
         analyze_result["preview_url"] = preview_url
+        analyze_result["preview_image"] = preview_url
         if "overlay" in analyze_result:
             analyze_result["overlay"]["preview_url"] = preview_url
     
-    # Job status'u analiz sonucu ile güncelle
-    job_status[job_id] = analyze_result
+    # Compute DB fields
+    final_status = analyze_result.get("final_status", "UNKNOWN")
+    db_status = {
+        "PASS": JobStatus.PASS,
+        "WARN": JobStatus.WARN,
+        "FAIL": JobStatus.FAIL
+    }.get(final_status, JobStatus.ANALYZED)
+    
+    requires_ack_ids = [
+        issue.get("id") for issue in analyze_result.get("issues", [])
+        if issue.get("requires_ack", False)
+    ]
+    
+    can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
+    
+    # Save to DB - use direct asyncpg connection for sync context
+    db_saved = False
+    database_url = os.getenv("DATABASE_URL", "")
+    
+    if database_url:
+        asyncpg_url = re.sub(r'^postgres(ql)?://', 'postgresql://', database_url)
+        
+        async def save_to_db():
+            conn = await asyncpg.connect(asyncpg_url)
+            try:
+                await conn.execute("""
+                    UPDATE jobs 
+                    SET status = $1,
+                        analysis_result = $2::jsonb,
+                        normalized_image_path = COALESCE($3, normalized_image_path),
+                        requires_ack_ids = $4::jsonb,
+                        acknowledged_issue_ids = '[]'::jsonb,
+                        can_continue = $5
+                    WHERE id = $6::uuid
+                """, 
+                    db_status,
+                    json.dumps(analyze_result, default=str),
+                    analyze_result.get("normalized_url"),
+                    json.dumps(requires_ack_ids),
+                    can_continue,
+                    job_id
+                )
+                return True
+            finally:
+                await conn.close()
+        
+        loop = asyncio.new_event_loop()
+        try:
+            db_saved = loop.run_until_complete(save_to_db())
+            print(f"✅ [DB] Job {job_id} saved to database")
+        except Exception as e:
+            print(f"⚠️ [DB] Failed to save job {job_id}: {e}")
+        finally:
+            loop.close()
+    
+    # Clear processing cache - DB is now source of truth
+    if db_saved:
+        _processing_jobs.pop(job_id, None)
+    elif DEV_ALLOW_MEMORY_FALLBACK:
+        # Dev mode: keep in processing cache as fallback
+        _processing_jobs[job_id] = analyze_result
+        print(f"⚠️ [DEV] Keeping job {job_id} in memory fallback")
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -398,9 +642,25 @@ async def list_uploads_api():
 
 @app.get("/job/{job_id}", response_class=HTMLResponse)
 async def job_page(request: Request, job_id: str):
-    """Job sayfasını render et"""
-    # Job var mı kontrol et
-    if job_id not in job_status:
+    """Job sayfasını render et - DB-first"""
+    # Check processing cache first (brief window)
+    if job_id in _processing_jobs:
+        return templates.TemplateResponse("job.html", {
+            "request": request,
+            "job_id": job_id
+        })
+    
+    # DB-first check
+    db_job, error = await get_job_safe(job_id)
+    
+    if error:
+        # DB error
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "message": "Veritabanı hatası. Lütfen daha sonra tekrar deneyin."
+        }, status_code=503)
+    
+    if not db_job:
         return templates.TemplateResponse("job_not_found.html", {
             "request": request,
             "job_id": job_id
@@ -413,14 +673,218 @@ async def job_page(request: Request, job_id: str):
 
 @app.get("/job/{job_id}/status", response_class=JSONResponse)
 async def job_status_endpoint(job_id: str):
-    """Job status'u JSON olarak döndür"""
-    if job_id not in job_status:
+    """
+    Job status'u JSON olarak döndür.
+    
+    Production behavior:
+    - DB-first reads (no memory precedence)
+    - Returns 404 if job not found
+    - Returns 503 if DB error (unless DEV_ALLOW_MEMORY_FALLBACK=true)
+    """
+    # Check if job is currently being processed (brief window)
+    if job_id in _processing_jobs:
+        return JSONResponse(_processing_jobs[job_id])
+    
+    # DB-first read
+    db_job, error = await get_job_safe(job_id)
+    
+    if error:
+        # DB error - return 503 in production
+        print(f"❌ [DB] get_job failed: {error[:100]}")
         return JSONResponse({
-            "status": "not_found"
+            "status": "error",
+            "error": "Veritabanı hatası. Lütfen daha sonra tekrar deneyin.",
+            "code": "DB_ERROR"
+        }, status_code=503)
+    
+    if not db_job:
+        # Job not found
+        return JSONResponse({
+            "status": "not_found",
+            "error": "İş bulunamadı"
+        }, status_code=404)
+    
+    # Format and return
+    response = _format_job_response(db_job)
+    return JSONResponse(response)
+
+
+# Request model for process endpoint
+class ProcessRequest(BaseModel):
+    acknowledged_issue_ids: List[str] = []
+
+
+@app.post("/process/{job_id}", response_class=JSONResponse)
+async def process_photo(job_id: str, request: ProcessRequest):
+    """
+    Process the photo after user acknowledgement.
+    
+    This endpoint:
+    1. Re-runs analysis with acknowledged_ids to update can_continue
+    2. If can_continue is True, processes with PhotoRoom (background removal)
+    3. Returns the processed photo URL
+    """
+    # DB-first job lookup
+    db_job, error = await get_job_safe(job_id)
+    
+    if error:
+        return JSONResponse({
+            "success": False,
+            "error": "Veritabanı hatası"
+        }, status_code=503)
+    
+    if not db_job:
+        return JSONResponse({
+            "success": False,
+            "error": "Job not found"
+        }, status_code=404)
+    
+    # Build current_job from DB
+    current_job = db_job.get("analysis_result") or {}
+    original_path = db_job.get("original_image_path", "")
+    ext = os.path.splitext(original_path)[1] or ".jpg"
+    current_job["preview_url"] = f"/uploads/{job_id}{ext}"
+    
+    # Get the original file path
+    # Job ID format: uuid + extension stored in uploads/
+    uploads_dir = Path("uploads")
+    job_files = list(uploads_dir.glob(f"{job_id}.*"))
+    
+    if not job_files:
+        return JSONResponse({
+            "success": False,
+            "error": "Original file not found"
+        }, status_code=404)
+    
+    saved_file_path = str(job_files[0])
+    acknowledged_ids = request.acknowledged_issue_ids
+    
+    print(f"🔵 [APP] Processing job {job_id} with acknowledged_ids: {acknowledged_ids}")
+    
+    # Re-run V2 analysis with acknowledged_ids
+    if USE_V2_ANALYZER:
+        analyze_result = analyze_image_v2(job_id, saved_file_path, acknowledged_ids=acknowledged_ids)
+    else:
+        # V1 doesn't support acknowledged_ids
+        analyze_result = current_job
+    
+    # Preserve preview_url
+    preview_url = current_job.get("preview_url")
+    if preview_url:
+        analyze_result["preview_url"] = preview_url
+        analyze_result["preview_image"] = preview_url
+    
+    # Check if we can continue
+    can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
+    
+    if not can_continue:
+        # Update and return
+        analyze_result["analysis_source"] = "V2_ANALYZER"
+        analyze_result["pipeline_version"] = PIPELINE_VERSION
+        return JSONResponse({
+            "success": False,
+            "error": "Cannot continue - unresolved issues",
+            "job": analyze_result
         })
     
-    # Job status'u direkt döndür
-    return JSONResponse(job_status[job_id])
+    # ==========================================================================
+    # PHOTOROOM PROCESSING
+    # ==========================================================================
+    print(f"🔵 [PIPELINE_START] Job {job_id} - PhotoRoom processing")
+    print(f"🔵 [PIPELINE_BRANCH] Checking PhotoRoom configuration...")
+    
+    photoroom_configured = check_photoroom_configured()
+    
+    if not photoroom_configured:
+        print(f"⚠️ [PIPELINE_BRANCH] FALLBACK - PhotoRoom API key not configured")
+        analyze_result["analysis_source"] = "FALLBACK"
+        analyze_result["pipeline_version"] = PIPELINE_VERSION
+        analyze_result["photoroom_error"] = "API key not configured"
+        analyze_result["processed"] = False
+        analyze_result["status"] = "done"
+        return JSONResponse({
+            "success": True,
+            "job": analyze_result,
+            "warning": "PhotoRoom not configured - returning validation only"
+        })
+    
+    print(f"🔵 [PHOTOROOM_CALL_START] Job {job_id}")
+    import time as _time
+    photoroom_start = _time.time()
+    
+    try:
+        # Load image and process with PhotoRoom
+        image_bgr = cv2.imread(saved_file_path)
+        if image_bgr is None:
+            raise ValueError("Could not load image")
+        
+        processed_bgr, photoroom_metrics = process_biometric_photo(
+            image_bgr,
+            job_id=job_id
+        )
+        
+        photoroom_elapsed = _time.time() - photoroom_start
+        print(f"🔵 [PHOTOROOM_CALL_END] Job {job_id} - {photoroom_elapsed*1000:.0f}ms - SUCCESS")
+        
+        # Save processed image
+        processed_filename = f"{job_id}_processed.png"
+        processed_path = f"uploads/{processed_filename}"
+        cv2.imwrite(processed_path, processed_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+        
+        # Update result
+        analyze_result["analysis_source"] = "PHOTOROOM"
+        analyze_result["pipeline_version"] = PIPELINE_VERSION
+        analyze_result["processed"] = True
+        analyze_result["processed_url"] = f"/uploads/{processed_filename}"
+        analyze_result["photoroom_metrics"] = photoroom_metrics
+        analyze_result["status"] = "done"
+        
+        print(f"🔵 [FINAL_STATUS] Job {job_id} - PASS - Issues: {[i['id'] for i in analyze_result.get('issues', [])]}")
+        
+    except Exception as e:
+        photoroom_elapsed = _time.time() - photoroom_start
+        error_str = str(e)
+        print(f"❌ [PHOTOROOM_CALL_END] Job {job_id} - {photoroom_elapsed*1000:.0f}ms - FAILED: {error_str}")
+        
+        # Check if it's a rate limit error
+        is_rate_limit = "429" in error_str or "throttled" in error_str.lower()
+        
+        analyze_result["analysis_source"] = "FALLBACK"
+        analyze_result["pipeline_version"] = PIPELINE_VERSION
+        analyze_result["photoroom_error"] = error_str
+        analyze_result["processed"] = False
+        analyze_result["status"] = "done"
+        
+        if is_rate_limit:
+            return JSONResponse({
+                "success": False,
+                "error": "PhotoRoom API rate limited. Please try again later.",
+                "error_code": "RATE_LIMITED",
+                "job": analyze_result
+            })
+        
+        return JSONResponse({
+            "success": False,
+            "error": f"PhotoRoom processing failed: {error_str}",
+            "job": analyze_result
+        })
+    
+    # Update DB with processed image path (don't overwrite analysis_result)
+    updated_job, db_error = await update_job_safe(
+        job_id, 
+        processed_image_path=analyze_result.get("processed_url")
+    )
+    
+    if db_error:
+        print(f"⚠️ [DB] Failed to update processed path: {db_error}")
+    else:
+        print(f"✅ [DB] Processed image path saved for job {job_id}")
+    
+    return JSONResponse({
+        "success": True,
+        "job": analyze_result
+    })
+
 
 @app.post("/upload", response_class=JSONResponse)
 async def upload_file(request: Request, background_tasks: BackgroundTasks, photo: UploadFile = File(...)):
@@ -468,8 +932,24 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
         # Preview URL oluştur
         preview_url = f"/uploads/{job_id}{ext}"
         
-        # Job status'u başlangıç durumunda oluştur (process_job background task'ta güncelleyecek)
-        job_status[job_id] = {
+        # Job'u veritabanında oluştur
+        db_job, db_error = await create_job_safe(
+            job_id=job_id,
+            original_image_path=saved_file_path,
+            status=JobStatus.PROCESSING
+        )
+        
+        if db_error and not DEV_ALLOW_MEMORY_FALLBACK:
+            # Production: DB failure is fatal for upload
+            print(f"❌ [DB] create_job failed: {db_error}")
+            return JSONResponse({
+                "success": False,
+                "error": "Veritabanı hatası. Lütfen daha sonra tekrar deneyin.",
+                "job_id": None
+            }, status_code=503)
+        
+        # Store in processing cache for the brief analysis window
+        _processing_jobs[job_id] = {
             "status": "processing",
             "result": None,
             "reasons": [],
@@ -492,3 +972,334 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
             "error": f"Dosya kaydedilirken bir sorun oluştu: {str(e)}",
             "job_id": None
         }, status_code=500)
+
+
+# ============================================================================
+# Payment Endpoints
+# ============================================================================
+
+class ShippingInfo(BaseModel):
+    first_name: str
+    last_name: str
+    address: str
+    city: str
+    postal_code: str
+    phone: str
+    email: str
+
+
+class CheckoutRequest(BaseModel):
+    job_id: str
+    package_type: str  # "digital" or "digital_print"
+    shipping: Optional[ShippingInfo] = None
+
+
+@app.post("/api/checkout", response_class=JSONResponse)
+async def create_checkout(request: Request, checkout_req: CheckoutRequest):
+    """
+    Create a Stripe Checkout session for payment.
+    Returns 501 if payments are disabled.
+    """
+    # Guard: Check if payments are enabled
+    if not is_payments_enabled():
+        return JSONResponse({
+            "success": False,
+            "error": "Ödeme sistemi şu anda aktif değil",
+            "code": "PAYMENTS_DISABLED"
+        }, status_code=501)
+    
+    job_id = checkout_req.job_id
+    package_type = checkout_req.package_type
+    
+    # DB-first job validation
+    db_job, error = await get_job_safe(job_id)
+    
+    if error:
+        return JSONResponse({
+            "success": False,
+            "error": "Veritabanı hatası"
+        }, status_code=503)
+    
+    if not db_job:
+        return JSONResponse({
+            "success": False,
+            "error": "İş bulunamadı"
+        }, status_code=404)
+    
+    # Validate package type
+    if package_type not in ["digital", "digital_print"]:
+        return JSONResponse({
+            "success": False,
+            "error": "Geçersiz paket tipi"
+        }, status_code=400)
+    
+    # Require shipping info for digital_print
+    if package_type == "digital_print" and not checkout_req.shipping:
+        return JSONResponse({
+            "success": False,
+            "error": "Baskı siparişi için teslimat bilgileri gerekli"
+        }, status_code=400)
+    
+    # Store shipping info (email in jobs table, print_orders table later)
+    if checkout_req.shipping:
+        # Update user email and payment state in DB
+        _, db_error = await update_job_safe(
+            job_id,
+            user_email=checkout_req.shipping.email,
+            payment_state=PaymentState.PAYMENT_PENDING
+        )
+        if db_error:
+            print(f"⚠️ [DB] Failed to update email: {db_error}")
+        else:
+            print(f"[CHECKOUT] Shipping info saved for job {job_id}")
+    
+    # Build URLs
+    base_url = str(request.base_url).rstrip("/")
+    success_url = f"{base_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{base_url}/payment/cancel?job_id={job_id}"
+    
+    try:
+        result = create_checkout_session(
+            job_id=job_id,
+            package_type=package_type,
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "checkout_url": result["checkout_url"],
+            "session_id": result["session_id"],
+        })
+        
+    except ValueError as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+    except Exception as e:
+        print(f"❌ [CHECKOUT] Error: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": "Ödeme oturumu oluşturulamadı"
+        }, status_code=500)
+
+
+@app.get("/payment/success", response_class=HTMLResponse)
+async def payment_success(request: Request, session_id: str):
+    """
+    Handle successful payment redirect from Stripe.
+    Note: This page should NOT trust the session_id alone - webhook verification is required.
+    """
+    # Try to get job_id from Stripe session
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        job_id = session.metadata.get("job_id")
+    except:
+        job_id = None
+    
+    return templates.TemplateResponse("payment_success.html", {
+        "request": request,
+        "session_id": session_id,
+        "job_id": job_id,
+    })
+
+
+@app.get("/payment/cancel", response_class=HTMLResponse)
+async def payment_cancel(request: Request, job_id: str = None):
+    """Handle cancelled payment redirect from Stripe."""
+    return templates.TemplateResponse("payment_cancel.html", {
+        "request": request,
+        "job_id": job_id,
+    })
+
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """
+    Handle Stripe webhooks for payment verification.
+    
+    This endpoint verifies the webhook signature and processes
+    checkout.session.completed events to mark orders as paid.
+    
+    Returns 501 if payments are disabled.
+    """
+    # Guard: Check if payments are enabled
+    if not is_payments_enabled():
+        return JSONResponse({
+            "error": "Payments disabled"
+        }, status_code=501)
+    
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    
+    # Verify signature
+    if not verify_webhook_signature(payload, sig_header):
+        print("❌ [WEBHOOK] Invalid signature")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    try:
+        # Import stripe only when needed
+        import stripe as _stripe
+        event = _stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        print(f"❌ [WEBHOOK] Error constructing event: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Handle the event
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        success = handle_checkout_completed(session)
+        
+        if success:
+            print(f"✅ [WEBHOOK] Checkout completed for job: {session.get('metadata', {}).get('job_id')}")
+        else:
+            print(f"⚠️ [WEBHOOK] Failed to process checkout completion")
+    
+    return JSONResponse({"received": True})
+
+
+@app.get("/api/payment/status/{job_id}", response_class=JSONResponse)
+async def get_payment_status(job_id: str):
+    """
+    Get payment status for a job.
+    
+    If payments are disabled:
+    - Returns enabled=false
+    - can_download=true (free download during beta)
+    """
+    # Check if payments are enabled
+    payments_enabled = is_payments_enabled()
+    
+    if not payments_enabled:
+        # Payments disabled - allow free download
+        return JSONResponse({
+            "enabled": False,
+            "paid": True,  # Treat as paid when payments disabled
+            "state": "FREE",
+            "can_download": True,
+            "download_url": generate_signed_url(job_id),
+            "message": "Beta döneminde indirme ücretsiz"
+        })
+    
+    order = get_order(job_id)
+    
+    if not order:
+        # Check if job exists in DB
+        db_job, _ = await get_job_safe(job_id)
+        if db_job:
+            # Job exists but no payment attempted
+            return JSONResponse({
+                "enabled": True,
+                "paid": False,
+                "state": "ANALYZED",
+                "can_download": False,
+            })
+        return JSONResponse({
+            "error": "İş bulunamadı"
+        }, status_code=404)
+    
+    paid = is_paid(job_id)
+    
+    return JSONResponse({
+        "enabled": True,
+        "paid": paid,
+        "state": order.get("state"),
+        "package_type": order.get("package_type"),
+        "can_download": paid,
+        "download_url": generate_signed_url(job_id) if paid else None,
+    })
+
+
+@app.get("/api/download/{job_id}", response_class=FileResponse)
+async def secure_download(job_id: str, expires: int = None, sig: str = None):
+    """
+    Secure download endpoint for processed photos.
+    
+    Two modes:
+    1. Signed URL mode (with expires + sig): Verify signature
+    2. Direct mode (no sig): Verify payment status server-side
+    """
+    # If signed URL parameters provided, verify them
+    if expires is not None and sig is not None:
+        if not verify_signed_url(job_id, expires, sig):
+            raise HTTPException(status_code=403, detail="Geçersiz veya süresi dolmuş link")
+    else:
+        # No signed URL - verify payment status
+        if not is_paid(job_id):
+            raise HTTPException(status_code=403, detail="İndirme için ödeme gerekli")
+    
+    # Find the processed file
+    processed_path = Path(f"uploads/{job_id}_processed.png")
+    
+    if not processed_path.exists():
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    
+    # Return file with proper headers for download
+    return FileResponse(
+        path=str(processed_path),
+        filename=f"biyometrik_foto_{job_id[:8]}.png",
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="biyometrik_foto_{job_id[:8]}.png"'
+        }
+    )
+
+
+class EmailLinkRequest(BaseModel):
+    job_id: str
+    email: str
+
+
+@app.post("/api/email-link", response_class=JSONResponse)
+async def send_email_link(request: Request, email_req: EmailLinkRequest):
+    """
+    Send download link to user's email (optional, after payment).
+    """
+    job_id = email_req.job_id
+    email = email_req.email
+    
+    # Verify payment
+    if not is_paid(job_id):
+        return JSONResponse({
+            "success": False,
+            "error": "E-posta linki göndermek için ödeme gerekli"
+        }, status_code=403)
+    
+    # Generate signed URL (24 hour expiry)
+    download_url = generate_email_link(job_id, expires_in_hours=24)
+    
+    # Get base URL
+    base_url = str(request.base_url).rstrip("/")
+    
+    # Send email
+    result = send_download_link(
+        job_id=job_id,
+        email=email,
+        download_url=download_url,
+        base_url=base_url,
+    )
+    
+    if result["success"]:
+        # Update order state
+        update_order_state(job_id, "DELIVERED", email_sent_to=email)
+    
+    return JSONResponse(result)
+
+
+@app.get("/api/config/stripe", response_class=JSONResponse)
+async def get_stripe_config():
+    """
+    Get payment configuration for frontend.
+    Returns enabled status and prices even when payments are disabled.
+    """
+    config = get_payments_config()
+    return JSONResponse({
+        "enabled": config["enabled"],
+        "publishable_key": config.get("publishable_key", ""),
+        "message": config.get("message", ""),
+        "prices": {
+            "digital": config["digital_price"],
+            "digital_print": config["print_price"],
+        }
+    })

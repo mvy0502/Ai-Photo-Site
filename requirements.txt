@@ -1,8 +1,27 @@
+# Core
 fastapi
-uvicorn
+uvicorn[standard]
+gunicorn
+
+# Templates & Static
 jinja2
 python-multipart
-opencv-python
+
+# Image Processing
+opencv-python-headless
 mediapipe
 numpy
 
+# Payment
+stripe
+
+# Database
+sqlalchemy[asyncio]
+asyncpg
+
+# Auth & Utils
+PyJWT
+python-dotenv
+
+# HTTP Client (for PhotoRoom API)
+httpx
