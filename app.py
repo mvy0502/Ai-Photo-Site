@@ -707,14 +707,24 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
     can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
     
     # Save to DB - use direct asyncpg connection for sync context
+    # Import sanitized URL from env_config
+    from utils.env_config import get_database_url
+    
     db_saved = False
-    database_url = os.getenv("DATABASE_URL", "")
+    database_url, _ = get_database_url(required=False)
     
     if database_url:
+        # Convert to asyncpg format (postgresql://)
         asyncpg_url = re.sub(r'^postgres(ql)?://', 'postgresql://', database_url)
         
+        print(f"🔵 [DB] Attempting to save job {job_id} to database")
+        
         async def save_to_db():
-            conn = await asyncpg.connect(asyncpg_url)
+            # Disable prepared statement cache for PgBouncer compatibility
+            conn = await asyncpg.connect(
+                asyncpg_url,
+                statement_cache_size=0
+            )
             try:
                 await conn.execute("""
                     UPDATE jobs 
@@ -723,7 +733,8 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
                         normalized_image_path = COALESCE($3, normalized_image_path),
                         requires_ack_ids = $4::jsonb,
                         acknowledged_issue_ids = '[]'::jsonb,
-                        can_continue = $5
+                        can_continue = $5,
+                        updated_at = NOW()
                     WHERE id = $6::uuid
                 """, 
                     db_status,
@@ -743,8 +754,12 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
             print(f"✅ [DB] Job {job_id} saved to database")
         except Exception as e:
             print(f"⚠️ [DB] Failed to save job {job_id}: {e}")
+            import traceback as tb
+            print(f"⚠️ [DB] Traceback: {tb.format_exc()[-500:]}")
         finally:
             loop.close()
+    else:
+        print(f"⚠️ [DB] No DATABASE_URL configured, cannot save job {job_id}")
     
     # Clear image bytes from processing cache (save memory)
     if job_id in _processing_jobs:
