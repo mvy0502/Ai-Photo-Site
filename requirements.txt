@@ -25,3 +25,6 @@ python-dotenv
 
 # HTTP Client (for PhotoRoom API)
 httpx
+
+# Supabase Storage
+supabase>=2.0.0

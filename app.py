@@ -36,6 +36,11 @@ from utils.payment import (
 )
 from utils.email_service import send_download_link, is_email_configured
 from utils.db import db_manager
+from utils.supabase_storage import (
+    is_storage_configured, upload_bytes, create_signed_url, download_bytes,
+    get_object_key, get_content_type, validate_image_bytes,
+    upload_bytes_sync, create_signed_url_sync, download_bytes_sync
+)
 from utils.db_jobs import (
     create_job_safe, get_job_safe, update_job_safe,
     save_analysis_result, save_processed_image, update_job,
@@ -586,6 +591,135 @@ def process_job(job_id: str, saved_file_path: str):
         _processing_jobs[job_id] = analyze_result
         print(f"⚠️ [DEV] Keeping job {job_id} in memory fallback")
 
+
+def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supabase: bool):
+    """
+    Background task - process job with image bytes (for Supabase Storage).
+    
+    This variant takes image bytes directly instead of a file path,
+    avoiding the need to re-download from storage for analysis.
+    """
+    import asyncio
+    import asyncpg
+    import json
+    import re
+    import tempfile
+    
+    # Get preview URL from processing cache
+    current_status = _processing_jobs.get(job_id, {})
+    preview_url = current_status.get("preview_url", None)
+    
+    # Small delay for UI
+    time.sleep(0.5)
+    
+    # Create a temporary file for analysis (analyzers expect file paths)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(image_bytes)
+            temp_path = tmp.name
+        
+        # Run analysis
+        print(f"🔵 [PIPELINE_START] Job {job_id} - Initial analysis (bytes mode)")
+        
+        if USE_V2_ANALYZER:
+            print(f"🔵 [PIPELINE_BRANCH] V2_ANALYZER selected")
+            analyze_result = analyze_image_v2(job_id, temp_path)
+            analyze_result["analysis_source"] = "V2_ANALYZER"
+        else:
+            print(f"🔵 [PIPELINE_BRANCH] V1_ANALYZER selected (legacy)")
+            analyze_result = analyze_image(job_id, temp_path)
+            analyze_result["analysis_source"] = "V1_ANALYZER"
+        
+        analyze_result["pipeline_version"] = PIPELINE_VERSION
+        analyze_result["storage_backend"] = "supabase" if use_supabase else "local"
+        
+        issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
+        print(f"🔵 [FINAL_STATUS] Job {job_id} - {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+        
+    finally:
+        # Clean up temp file
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+    
+    # Preview URL'yi koru (orijinal fotoğraf)
+    if preview_url:
+        analyze_result["preview_url"] = preview_url
+        analyze_result["preview_image"] = preview_url
+        if "overlay" in analyze_result:
+            analyze_result["overlay"]["preview_url"] = preview_url
+    
+    # Compute DB fields
+    final_status = analyze_result.get("final_status", "UNKNOWN")
+    db_status = {
+        "PASS": JobStatus.PASS,
+        "WARN": JobStatus.WARN,
+        "FAIL": JobStatus.FAIL
+    }.get(final_status, JobStatus.ANALYZED)
+    
+    requires_ack_ids = [
+        issue.get("id") for issue in analyze_result.get("issues", [])
+        if issue.get("requires_ack", False)
+    ]
+    
+    can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
+    
+    # Save to DB - use direct asyncpg connection for sync context
+    db_saved = False
+    database_url = os.getenv("DATABASE_URL", "")
+    
+    if database_url:
+        asyncpg_url = re.sub(r'^postgres(ql)?://', 'postgresql://', database_url)
+        
+        async def save_to_db():
+            conn = await asyncpg.connect(asyncpg_url)
+            try:
+                await conn.execute("""
+                    UPDATE jobs 
+                    SET status = $1,
+                        analysis_result = $2::jsonb,
+                        normalized_image_path = COALESCE($3, normalized_image_path),
+                        requires_ack_ids = $4::jsonb,
+                        acknowledged_issue_ids = '[]'::jsonb,
+                        can_continue = $5
+                    WHERE id = $6::uuid
+                """, 
+                    db_status,
+                    json.dumps(analyze_result, default=str),
+                    analyze_result.get("normalized_url"),
+                    json.dumps(requires_ack_ids),
+                    can_continue,
+                    job_id
+                )
+                return True
+            finally:
+                await conn.close()
+        
+        loop = asyncio.new_event_loop()
+        try:
+            db_saved = loop.run_until_complete(save_to_db())
+            print(f"✅ [DB] Job {job_id} saved to database")
+        except Exception as e:
+            print(f"⚠️ [DB] Failed to save job {job_id}: {e}")
+        finally:
+            loop.close()
+    
+    # Clear image bytes from processing cache (save memory)
+    if job_id in _processing_jobs:
+        _processing_jobs[job_id].pop("image_bytes", None)
+    
+    # Clear processing cache - DB is now source of truth
+    if db_saved:
+        _processing_jobs.pop(job_id, None)
+    elif DEV_ALLOW_MEMORY_FALLBACK:
+        # Dev mode: keep in processing cache as fallback
+        _processing_jobs[job_id] = analyze_result
+        print(f"⚠️ [DEV] Keeping job {job_id} in memory fallback")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -812,11 +946,28 @@ async def process_photo(job_id: str, request: ProcessRequest):
     
     print(f"🔵 [PHOTOROOM_CALL_START] Job {job_id}")
     import time as _time
+    import tempfile
     photoroom_start = _time.time()
     
+    # Determine storage backend
+    use_supabase = is_storage_configured()
+    original_path = db_job.get("original_image_path", "")
+    
     try:
-        # Load image and process with PhotoRoom
-        image_bgr = cv2.imread(saved_file_path)
+        # Load image - handle both local and Supabase storage
+        if use_supabase and original_path.startswith("originals/"):
+            # Download from Supabase Storage
+            image_bytes, download_error = download_bytes_sync(original_path)
+            if download_error or not image_bytes:
+                raise ValueError(f"Could not download from storage: {download_error}")
+            
+            # Decode bytes to image
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            image_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        else:
+            # Local file
+            image_bgr = cv2.imread(saved_file_path)
+        
         if image_bgr is None:
             raise ValueError("Could not load image")
         
@@ -828,16 +979,47 @@ async def process_photo(job_id: str, request: ProcessRequest):
         photoroom_elapsed = _time.time() - photoroom_start
         print(f"🔵 [PHOTOROOM_CALL_END] Job {job_id} - {photoroom_elapsed*1000:.0f}ms - SUCCESS")
         
-        # Save processed image
-        processed_filename = f"{job_id}_processed.png"
-        processed_path = f"uploads/{processed_filename}"
-        cv2.imwrite(processed_path, processed_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+        # Encode processed image to PNG bytes
+        _, png_buffer = cv2.imencode('.png', processed_bgr, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+        processed_bytes = png_buffer.tobytes()
+        
+        if use_supabase:
+            # Upload processed image to Supabase Storage
+            processed_key = get_object_key("processed", job_id, ".png")
+            stored_key, storage_error = upload_bytes_sync(processed_key, processed_bytes, "image/png")
+            
+            if storage_error:
+                print(f"⚠️ [STORAGE] Failed to upload processed image: {storage_error}")
+                # Fallback to local
+                processed_filename = f"{job_id}_processed.png"
+                local_path = f"uploads/{processed_filename}"
+                with open(local_path, "wb") as f:
+                    f.write(processed_bytes)
+                processed_url = f"/uploads/{processed_filename}"
+                processed_db_path = local_path  # Store local path in DB
+            else:
+                # Create signed URL for frontend display (24h)
+                processed_url, _ = create_signed_url_sync(processed_key, 86400)
+                if not processed_url:
+                    processed_url = f"/api/download/{job_id}"
+                processed_db_path = processed_key  # Store object key in DB
+                print(f"✅ [STORAGE] Processed image uploaded: {processed_key}")
+        else:
+            # Local storage
+            processed_filename = f"{job_id}_processed.png"
+            local_path = f"uploads/{processed_filename}"
+            with open(local_path, "wb") as f:
+                f.write(processed_bytes)
+            processed_url = f"/uploads/{processed_filename}"
+            processed_db_path = local_path  # Store local path in DB
         
         # Update result
         analyze_result["analysis_source"] = "PHOTOROOM"
         analyze_result["pipeline_version"] = PIPELINE_VERSION
         analyze_result["processed"] = True
-        analyze_result["processed_url"] = f"/uploads/{processed_filename}"
+        analyze_result["processed_url"] = processed_url  # Signed URL or local path for frontend
+        analyze_result["processed_db_path"] = processed_db_path  # Object key or local path for DB
+        analyze_result["storage_backend"] = "supabase" if use_supabase else "local"
         analyze_result["photoroom_metrics"] = photoroom_metrics
         analyze_result["status"] = "done"
         
@@ -871,10 +1053,10 @@ async def process_photo(job_id: str, request: ProcessRequest):
             "job": analyze_result
         })
     
-    # Update DB with processed image path (don't overwrite analysis_result)
+    # Update DB with processed image path (store object key, not signed URL)
     updated_job, db_error = await update_job_safe(
         job_id, 
-        processed_image_path=analyze_result.get("processed_url")
+        processed_image_path=analyze_result.get("processed_db_path")
     )
     
     if db_error:
@@ -910,11 +1092,21 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
                 "job_id": None
             }, status_code=400)
         
-        # Dosya boyutu kontrolü
-        if len(content) > MAX_FILE_SIZE:
+        # Dosya boyutu kontrolü (10MB limit for storage)
+        MAX_STORAGE_SIZE = 10 * 1024 * 1024  # 10MB
+        if len(content) > MAX_STORAGE_SIZE:
             return JSONResponse({
                 "success": False,
-                "error": "Dosya çok büyük, maksimum 8MB",
+                "error": "Dosya çok büyük, maksimum 10MB",
+                "job_id": None
+            }, status_code=413)
+        
+        # Validate image magic bytes
+        is_valid, detected_type, validation_error = validate_image_bytes(content)
+        if not is_valid:
+            return JSONResponse({
+                "success": False,
+                "error": f"Geçersiz dosya formatı: {validation_error}",
                 "job_id": None
             }, status_code=400)
         
@@ -923,21 +1115,48 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
         
         # Dosya uzantısını al
         ext = get_file_extension(photo.filename)
+        content_type = get_content_type(ext)
         
-        # Dosya adını oluştur: {job_id}{ext}
-        saved_file_path = f"uploads/{job_id}{ext}"
+        # Determine storage backend
+        use_supabase = is_storage_configured()
         
-        # Dosyayı kaydet
-        with open(saved_file_path, "wb") as buffer:
-            buffer.write(content)
-        
-        # Preview URL oluştur
-        preview_url = f"/uploads/{job_id}{ext}"
+        if use_supabase:
+            # Upload to Supabase Storage
+            object_key = get_object_key("originals", job_id, ext)
+            stored_key, storage_error = await upload_bytes(object_key, content, content_type)
+            
+            if storage_error:
+                print(f"❌ [STORAGE] Upload failed: {storage_error}")
+                return JSONResponse({
+                    "success": False,
+                    "error": "Dosya yüklenirken bir sorun oluştu. Lütfen tekrar deneyin.",
+                    "job_id": None
+                }, status_code=503)
+            
+            # Store object key in DB (not local path)
+            original_image_path = object_key
+            
+            # Create signed URL for preview (1 hour)
+            preview_url, _ = await create_signed_url(object_key, 3600)
+            if not preview_url:
+                preview_url = f"/api/preview/{job_id}"  # Fallback to API
+            
+            print(f"✅ [UPLOAD] Stored in Supabase: {object_key}")
+        else:
+            # Fallback: Local filesystem storage
+            saved_file_path = f"uploads/{job_id}{ext}"
+            with open(saved_file_path, "wb") as buffer:
+                buffer.write(content)
+            
+            original_image_path = saved_file_path
+            preview_url = f"/uploads/{job_id}{ext}"
+            
+            print(f"✅ [UPLOAD] Stored locally: {saved_file_path}")
         
         # Job'u veritabanında oluştur
         db_job, db_error = await create_job_safe(
             job_id=job_id,
-            original_image_path=saved_file_path,
+            original_image_path=original_image_path,
             status=JobStatus.PROCESSING
         )
         
@@ -955,20 +1174,25 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
             "status": "processing",
             "result": None,
             "reasons": [],
-            "preview_url": preview_url
+            "preview_url": preview_url,
+            "image_bytes": content,  # Keep bytes for background analysis
+            "use_supabase": use_supabase
         }
         
         # Background task ile process_job başlat
-        background_tasks.add_task(process_job, job_id, saved_file_path)
+        # Pass content bytes for analysis (avoids re-download)
+        background_tasks.add_task(process_job_with_bytes, job_id, content, ext, use_supabase)
         
         # Başarılı yükleme - JSON response
         return JSONResponse({
             "success": True,
             "job_id": job_id,
             "preview_url": preview_url,
+            "storage": "supabase" if use_supabase else "local",
             "message": "Fotoğraf başarıyla yüklendi"
         })
     except Exception as e:
+        print(f"❌ [UPLOAD] Exception: {e}")
         return JSONResponse({
             "success": False,
             "error": f"Dosya kaydedilirken bir sorun oluştu: {str(e)}",
@@ -1213,7 +1437,7 @@ async def get_payment_status(job_id: str):
     })
 
 
-@app.get("/api/download/{job_id}", response_class=FileResponse)
+@app.get("/api/download/{job_id}")
 async def secure_download(job_id: str, expires: int = None, sig: str = None):
     """
     Secure download endpoint for processed photos.
@@ -1221,31 +1445,58 @@ async def secure_download(job_id: str, expires: int = None, sig: str = None):
     Two modes:
     1. Signed URL mode (with expires + sig): Verify signature
     2. Direct mode (no sig): Verify payment status server-side
+    
+    If using Supabase Storage, redirects to a signed URL.
+    If using local storage, serves the file directly.
     """
     # If signed URL parameters provided, verify them
     if expires is not None and sig is not None:
         if not verify_signed_url(job_id, expires, sig):
             raise HTTPException(status_code=403, detail="Geçersiz veya süresi dolmuş link")
     else:
-        # No signed URL - verify payment status
-        if not is_paid(job_id):
+        # No signed URL - verify payment status (skip if payments disabled)
+        if is_payments_enabled() and not is_paid(job_id):
             raise HTTPException(status_code=403, detail="İndirme için ödeme gerekli")
     
-    # Find the processed file
-    processed_path = Path(f"uploads/{job_id}_processed.png")
+    # Get job from DB to check storage backend
+    db_job, db_error = await get_job_safe(job_id)
     
-    if not processed_path.exists():
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    if db_error or not db_job:
+        raise HTTPException(status_code=404, detail="İş bulunamadı")
     
-    # Return file with proper headers for download
-    return FileResponse(
-        path=str(processed_path),
-        filename=f"biyometrik_foto_{job_id[:8]}.png",
-        media_type="image/png",
-        headers={
-            "Content-Disposition": f'attachment; filename="biyometrik_foto_{job_id[:8]}.png"'
-        }
-    )
+    processed_path = db_job.get("processed_image_path", "")
+    
+    # Check if stored in Supabase Storage (path starts with "processed/")
+    if processed_path.startswith("processed/") and is_storage_configured():
+        # Redirect to Supabase signed URL
+        signed_url, error = await create_signed_url(processed_path, 3600)  # 1 hour
+        
+        if error or not signed_url:
+            raise HTTPException(status_code=500, detail="İndirme linki oluşturulamadı")
+        
+        # Return redirect to signed URL with download headers
+        return RedirectResponse(
+            url=signed_url,
+            status_code=302,
+            headers={
+                "Content-Disposition": f'attachment; filename="biyometrik_foto_{job_id[:8]}.png"'
+            }
+        )
+    else:
+        # Local file fallback
+        local_path = Path(f"uploads/{job_id}_processed.png")
+        
+        if not local_path.exists():
+            raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+        
+        return FileResponse(
+            path=str(local_path),
+            filename=f"biyometrik_foto_{job_id[:8]}.png",
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'attachment; filename="biyometrik_foto_{job_id[:8]}.png"'
+            }
+        )
 
 
 class EmailLinkRequest(BaseModel):
@@ -1287,6 +1538,75 @@ async def send_email_link(request: Request, email_req: EmailLinkRequest):
         update_order_state(job_id, "DELIVERED", email_sent_to=email)
     
     return JSONResponse(result)
+
+
+@app.get("/api/preview/{job_id}")
+async def get_preview(job_id: str):
+    """
+    Get preview URL for a job's original image.
+    
+    If using Supabase Storage, returns a redirect to a signed URL.
+    If using local storage, redirects to the local file.
+    """
+    # Get job from DB
+    db_job, db_error = await get_job_safe(job_id)
+    
+    if db_error or not db_job:
+        raise HTTPException(status_code=404, detail="İş bulunamadı")
+    
+    original_path = db_job.get("original_image_path", "")
+    
+    # Check if stored in Supabase Storage (path starts with "originals/")
+    if original_path.startswith("originals/") and is_storage_configured():
+        # Redirect to Supabase signed URL
+        signed_url, error = await create_signed_url(original_path, 3600)  # 1 hour
+        
+        if error or not signed_url:
+            raise HTTPException(status_code=500, detail="Önizleme linki oluşturulamadı")
+        
+        return RedirectResponse(url=signed_url, status_code=302)
+    else:
+        # Local file - redirect to static file
+        ext = os.path.splitext(original_path)[1] or ".jpg"
+        local_url = f"/uploads/{job_id}{ext}"
+        return RedirectResponse(url=local_url, status_code=302)
+
+
+@app.get("/api/health/storage", response_class=JSONResponse)
+async def storage_health():
+    """Check Supabase Storage health."""
+    configured = is_storage_configured()
+    
+    if not configured:
+        return JSONResponse({
+            "ok": False,
+            "configured": False,
+            "message": "Supabase Storage not configured"
+        })
+    
+    # Try to list bucket (basic health check)
+    try:
+        from utils.supabase_storage import get_storage_client, _get_config
+        client = get_storage_client()
+        config = _get_config()
+        bucket = config["bucket"]
+        
+        # Try to list (will fail if bucket doesn't exist or no access)
+        result = client.storage.from_(bucket).list(limit=1)
+        
+        return JSONResponse({
+            "ok": True,
+            "configured": True,
+            "bucket": bucket,
+            "message": "Supabase Storage healthy"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "ok": False,
+            "configured": True,
+            "error": str(e)[:100],
+            "message": "Supabase Storage error"
+        })
 
 
 @app.get("/api/config/stripe", response_class=JSONResponse)

@@ -62,6 +62,17 @@ Set these in Render Dashboard → Environment:
 |----------|-------------|
 | `DATABASE_URL` | Supabase Postgres connection string |
 | `PHOTOROOM_API_KEY` | PhotoRoom production API key |
+| `SUPABASE_URL` | Supabase project URL (https://xxxx.supabase.co) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (server-side only) |
+
+### Storage (Optional - defaults set in render.yaml)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SUPABASE_STORAGE_BUCKET` | `photos` | Storage bucket name |
+| `SUPABASE_STORAGE_SIGNED_URL_TTL` | `86400` | Signed URL expiry (seconds) |
+
+> ⚠️ **Supabase Storage:** Create a **private** bucket named `photos` in Supabase Dashboard → Storage. Do NOT make the bucket public.
 
 ### Payment (Optional)
 
@@ -104,6 +115,7 @@ Set these in Render Dashboard → Environment:
 |----------|---------|
 | `/api/health` | Basic health check (used by Render) |
 | `/api/health/db` | Database connectivity check |
+| `/api/health/storage` | Supabase Storage connectivity check |
 
 ---
 
@@ -121,16 +133,36 @@ curl https://your-app.onrender.com/api/health/db
 # Expected: {"ok": true, "db": 1, "connection_info": {...}}
 ```
 
-### 3. Homepage Loads
+### 3. Storage Check
+```bash
+curl https://your-app.onrender.com/api/health/storage
+# Expected: {"ok": true, "configured": true, "bucket": "photos"}
+```
+
+### 5. Homepage Loads
 ```bash
 curl -I https://your-app.onrender.com/
 # Expected: HTTP/2 200
 ```
 
-### 4. Upload Test
+### 6. Upload Test
 ```bash
 curl -X POST -F "photo=@test.jpg" https://your-app.onrender.com/upload
-# Expected: {"success": true, "job_id": "..."}
+# Expected: {"success": true, "job_id": "...", "storage": "supabase"}
+```
+
+### 7. Job Status Test
+```bash
+# Replace JOB_ID with the job_id from upload response
+curl https://your-app.onrender.com/job/JOB_ID/status
+# Expected: {"status": "done", "final_status": "PASS", ...}
+```
+
+### 8. Download Test
+```bash
+# Replace JOB_ID with the job_id
+curl -I https://your-app.onrender.com/api/download/JOB_ID
+# Expected: HTTP/2 302 (redirect to signed URL)
 ```
 
 ---

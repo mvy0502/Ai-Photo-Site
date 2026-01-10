@@ -15,12 +15,31 @@ services:
       --bind 0.0.0.0:$PORT
       --timeout 120
 
+    healthCheckPath: /api/health
+
     envVars:
+      # Database (Required)
       - key: DATABASE_URL
         sync: false
 
+      # PhotoRoom API (Required for image processing)
       - key: PHOTOROOM_API_KEY
         sync: false
 
+      # Supabase Storage (Required for persistent file storage)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: "photos"
+      - key: SUPABASE_STORAGE_SIGNED_URL_TTL
+        value: "86400"
+
+      # Payments (Optional - disabled by default)
       - key: PAYMENTS_ENABLED
         value: "false"
+
+      # App Config
+      - key: PYTHONUNBUFFERED
+        value: "1"
