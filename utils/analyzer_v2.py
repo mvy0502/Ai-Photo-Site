@@ -896,7 +896,7 @@ class FaceLandmarkerAnalyzer:
         
         # Low reliability gate: never fail, only warn
         if roi_reliability < 0.50 and sunglasses_decision == "fail":
-                sunglasses_decision = "warn"
+            sunglasses_decision = "warn"
             sunglasses_reason += "_degraded_low_reliability"
         
         # Compute sunglasses_score for backwards compatibility
@@ -914,7 +914,7 @@ class FaceLandmarkerAnalyzer:
         # =====================================================================
         # GLASSES is detected if frame is present but sunglasses is NOT triggered
         
-                glasses_decision = "pass"
+        glasses_decision = "pass"
         glasses_score = frame_presence_score
         
         # Only emit GLASSES if sunglasses not triggered
