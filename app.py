@@ -1702,6 +1702,79 @@ async def config_check():
     })
 
 
+@app.get("/api/health/analyzer", response_class=JSONResponse)
+async def analyzer_health():
+    """
+    Check if the face analyzer is working.
+    
+    Tests:
+    - MediaPipe model loading
+    - OpenCV availability
+    - Basic image processing
+    """
+    import traceback
+    
+    results = {
+        "opencv": {"ok": False, "version": None},
+        "mediapipe": {"ok": False, "version": None},
+        "analyzer_v2": {"ok": False, "error": None},
+    }
+    
+    # Check OpenCV
+    try:
+        import cv2
+        results["opencv"]["ok"] = True
+        results["opencv"]["version"] = cv2.__version__
+    except Exception as e:
+        results["opencv"]["error"] = str(e)[:100]
+    
+    # Check MediaPipe
+    try:
+        import mediapipe as mp
+        results["mediapipe"]["ok"] = True
+        results["mediapipe"]["version"] = mp.__version__
+    except Exception as e:
+        results["mediapipe"]["error"] = str(e)[:100]
+    
+    # Check Analyzer V2
+    try:
+        from utils.analyze_v2 import analyze_image_v2
+        # Create a small test image
+        import numpy as np
+        test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+        test_img[:] = (255, 255, 255)  # White background
+        
+        # Save to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            cv2.imwrite(tmp.name, test_img)
+            temp_path = tmp.name
+        
+        # Try to analyze (should return FACE_NOT_FOUND for blank image)
+        try:
+            result = analyze_image_v2("test", temp_path)
+            results["analyzer_v2"]["ok"] = True
+            results["analyzer_v2"]["final_status"] = result.get("final_status")
+            results["analyzer_v2"]["issues"] = [i.get("id") for i in result.get("issues", [])]
+        finally:
+            import os
+            os.unlink(temp_path)
+    except Exception as e:
+        results["analyzer_v2"]["error"] = str(e)[:200]
+        results["analyzer_v2"]["traceback"] = traceback.format_exc()[-500:]
+    
+    all_ok = all([
+        results["opencv"]["ok"],
+        results["mediapipe"]["ok"],
+        results["analyzer_v2"]["ok"]
+    ])
+    
+    return JSONResponse({
+        "ok": all_ok,
+        "results": results
+    })
+
+
 @app.get("/api/config/stripe", response_class=JSONResponse)
 async def get_stripe_config():
     """
