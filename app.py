@@ -1257,9 +1257,8 @@ async def process_photo(job_id: str, request: ProcessRequest):
     
     # Check if stored in Supabase Storage
     if original_path.startswith("originals/") and is_storage_configured():
-        # Download from Supabase
-        from utils.supabase_storage import download_bytes_sync
-        content, err = download_bytes_sync(original_path)
+        # Download from Supabase (use async version - we're in async endpoint)
+        content, err = await download_bytes(original_path)
         if content:
             # Save temporarily for analysis
             ext = os.path.splitext(original_path)[1] or ".jpg"
@@ -1344,8 +1343,8 @@ async def process_photo(job_id: str, request: ProcessRequest):
     try:
         # Load image - handle both local and Supabase storage
         if use_supabase and original_path.startswith("originals/"):
-            # Download from Supabase Storage
-            image_bytes, download_error = download_bytes_sync(original_path)
+            # Download from Supabase Storage (use async version - we're in async endpoint)
+            image_bytes, download_error = await download_bytes(original_path)
             if download_error or not image_bytes:
                 raise ValueError(f"Could not download from storage: {download_error}")
             
