@@ -64,15 +64,21 @@ const wizardSteps = [
 // ============================================================================
 // Premium UX timing - slow, deliberate animations for quality perception
 // CRITICAL: Scan and steps must end at EXACTLY the same time for premium feel
-const MIN_PROCESSING_MS = 7500; // Minimum 7.5 saniye (= step completion)
+const MIN_SCAN_MS = 7500; // Minimum 7.5 saniye scan süresi
+const MIN_PROCESSING_MS = MIN_SCAN_MS; // Alias for compatibility
 const MAX_PROCESSING_MS = 15000; // Maximum 15 saniye
-const SCAN_DURATION_MS = 7500; // Scan animasyonu = step completion (synchronized)
+const SCAN_DURATION_MS = MIN_SCAN_MS; // Scan animasyonu = step completion (synchronized)
 const STEP_POINTS = [
-    { key: "crop", t: 1800 },       // 1.8s - Kırpma tamamlandı
-    { key: "bg_remove", t: 3800 },  // 3.8s - Arka plan kaldırma (~2s sonra)
-    { key: "resize", t: 5800 },     // 5.8s - Yeniden boyutlandırma (~2s sonra)
-    { key: "analyze", t: 7500 }     // 7.5s - Analiz (scan ile aynı anda biter)
+    { key: "crop", t: 0 },          // 0s - Kırpma hemen ✅
+    { key: "bg_remove", t: 2000 },  // 2s - Arka plan kaldırma
+    { key: "resize", t: 4500 },     // 4.5s - Yeniden boyutlandırma
+    { key: "analyze", t: 6500 }     // 6.5s - Analiz (7.5s'den önce biter)
 ];
+
+// New state flags for better flow control
+let scanMinDone = false;  // true when MIN_SCAN_MS elapsed
+let jobDone = false;      // true when backend returns DONE
+let processedImageUrl = null; // Store processed image URL when ready
 
 const processingSteps = [
     { name: "Kırpma", key: "crop" },
@@ -328,19 +334,27 @@ async function handleUpload(event) {
 function startProcessingUI(previewUrl) {
     if (!processingModal) return;
     
+    // Reset state flags
+    scanMinDone = false;
+    jobDone = false;
+    processedImageUrl = null;
+    
     // Reset step states
     stepStates = {};
     processingSteps.forEach(step => {
         stepStates[step.key] = "pending";
     });
     
+    // Remove any existing lock overlay from previous session
+    removeLockOverlay();
+    
     // Open modal
     processingModal.classList.remove('hidden');
     
-    // Set preview
+    // Set preview - show ORIGINAL photo normally (no blur during processing)
     setPreview(previewUrl);
     
-    // Overlay kesin aktif
+    // Overlay kesin aktif (scan animation)
     setOverlayMode("processing");
     
     // Start scan loop
@@ -375,6 +389,8 @@ function closeProcessingModal() {
         uiTimer = null;
     }
     stopScanLoop();
+    removeFinalCheckSpinner();
+    removeLockOverlay();
     processingModal.classList.add('hidden');
 }
 
@@ -437,54 +453,105 @@ function updateChecklistByElapsed(elapsed) {
             markStepPending(s.key);
         }
     }
+    
+    // Check if MIN_SCAN_MS elapsed
+    if (elapsed >= MIN_SCAN_MS && !scanMinDone) {
+        scanMinDone = true;
+        console.log('[FLOW] MIN scan time elapsed');
+    }
+    
+    // If MIN time passed but backend not done, show "son kontrol" spinner
+    if (scanMinDone && !jobDone) {
+        showFinalCheckSpinner();
+    }
+}
+
+// Show "son kontrol" spinner when waiting for backend
+function showFinalCheckSpinner() {
+    const progressSteps = document.getElementById('progressSteps');
+    if (!progressSteps) return;
+    
+    // Check if spinner already exists
+    if (document.getElementById('finalCheckSpinner')) return;
+    
+    const spinnerDiv = document.createElement('div');
+    spinnerDiv.id = 'finalCheckSpinner';
+    spinnerDiv.className = 'flex items-center gap-3 py-2 text-slate-500';
+    spinnerDiv.innerHTML = `
+        <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="text-sm">Son kontrol yapılıyor...</span>
+    `;
+    progressSteps.appendChild(spinnerDiv);
+}
+
+function removeFinalCheckSpinner() {
+    const spinner = document.getElementById('finalCheckSpinner');
+    if (spinner) {
+        spinner.remove();
+    }
 }
 
 // ============================================================================
 // Preview Functions
 // ============================================================================
-function setPreview(previewUrl, isLocked = true) {
+// During Step 2 (processing): Show ORIGINAL photo normally (no blur)
+// After processing + min time: Show PROCESSED photo with blur+lock
+function setPreview(previewUrl) {
     const previewImage = document.getElementById('previewImage');
     const previewPlaceholder = document.getElementById('previewPlaceholder');
-    const previewContainer = document.getElementById('previewContainer');
     
     if (previewUrl && previewImage && previewPlaceholder) {
         previewImage.src = previewUrl;
         previewImage.classList.remove('hidden');
         previewPlaceholder.classList.add('hidden');
         
-        // Apply blur + lock overlay during processing
-        if (isLocked) {
-            previewImage.style.filter = 'blur(8px)';
-            previewImage.style.transform = 'scale(1.05)';
-            
-            // Add lock overlay if not exists
-            if (!document.getElementById('previewLockOverlay')) {
-                const lockOverlay = document.createElement('div');
-                lockOverlay.id = 'previewLockOverlay';
-                lockOverlay.className = 'absolute inset-0 flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-[2px] z-10 transition-opacity duration-500';
-                lockOverlay.innerHTML = `
-                    <div class="w-16 h-16 bg-white/90 rounded-2xl shadow-xl flex items-center justify-center mb-3 animate-pulse">
-                        <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                        </svg>
-                    </div>
-                    <span class="text-white text-sm font-medium drop-shadow-lg">Kilitli önizleme</span>
-                    <span class="text-white/70 text-xs mt-1">İşlem tamamlandığında açılır</span>
-                `;
-                previewContainer.appendChild(lockOverlay);
-            }
-        } else {
-            // Remove blur and lock (processing complete)
-            previewImage.style.filter = 'none';
-            previewImage.style.transform = 'none';
-            
-            const lockOverlay = document.getElementById('previewLockOverlay');
-            if (lockOverlay) {
-                lockOverlay.style.opacity = '0';
-                setTimeout(() => lockOverlay.remove(), 500);
-            }
-        }
+        // IMPORTANT: During processing, show original WITHOUT blur
+        // Blur is only applied in setProcessedPreviewLocked()
+        previewImage.style.filter = 'none';
+        previewImage.style.transform = 'none';
     }
+}
+
+// Apply blur + lock to processed preview (called when showing processed result)
+function setProcessedPreviewLocked(processedUrl) {
+    const previewImage = document.getElementById('previewImage');
+    const previewContainer = document.getElementById('previewContainer');
+    
+    if (!previewImage || !previewContainer) return;
+    
+    // Preload processed image
+    const img = new Image();
+    img.onload = () => {
+        previewImage.src = processedUrl;
+        previewImage.style.filter = 'blur(14px)';
+        previewImage.style.transform = 'scale(1.02)';
+        
+        // Add lock overlay if not exists
+        if (!document.getElementById('previewLockOverlay')) {
+            const lockOverlay = document.createElement('div');
+            lockOverlay.id = 'previewLockOverlay';
+            lockOverlay.className = 'absolute inset-0 flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-[2px] z-10 transition-opacity duration-500';
+            lockOverlay.innerHTML = `
+                <div class="w-16 h-16 bg-white/90 rounded-2xl shadow-xl flex items-center justify-center mb-3 animate-pulse">
+                    <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                    </svg>
+                </div>
+                <span class="text-white text-sm font-medium drop-shadow-lg">Kilitli önizleme</span>
+                <span class="text-white/70 text-xs mt-1">Ödeme sonrası netleşir</span>
+            `;
+            previewContainer.appendChild(lockOverlay);
+        }
+    };
+    
+    img.onerror = () => {
+        console.warn('[Preview] Failed to load processed image, keeping original');
+    };
+    
+    img.src = processedUrl;
 }
 
 function unlockPreview() {
@@ -503,6 +570,13 @@ function unlockPreview() {
     }
 }
 
+function removeLockOverlay() {
+    const lockOverlay = document.getElementById('previewLockOverlay');
+    if (lockOverlay) {
+        lockOverlay.remove();
+    }
+}
+
 function setOverlayMode(mode) {
     const aiOverlay = document.getElementById('aiOverlay');
     if (!aiOverlay) return;
@@ -513,8 +587,7 @@ function setOverlayMode(mode) {
     } else if (mode === "done") {
         aiOverlay.classList.add('aiOverlay--paused');
         aiOverlay.classList.remove('aiOverlay--active');
-        // Unlock preview when processing is done
-        unlockPreview();
+        // Note: Don't unlock preview here - it's handled in showResultScreen
     }
 }
 
@@ -644,47 +717,25 @@ async function pollJob(jobId) {
     try {
         const response = await fetch(`/job/${jobId}/status`);
         
-        // Handle rate limiting (429)
+        // Handle rate limiting (429) - respect Retry-After header
         if (response.status === 429) {
-            const retryAfter = response.headers.get('Retry-After') || 2;
+            const retryAfter = parseInt(response.headers.get('Retry-After') || '2', 10);
             console.log(`[POLLING] Rate limited. Retry after ${retryAfter}s`);
-            setTimeout(() => scheduleNextPoll(jobId), retryAfter * 1000);
+            pollingInterval = setTimeout(() => pollJob(jobId), retryAfter * 1000);
             return;
         }
         
         const data = await response.json();
         
-        // #region agent log - Full JSON response logging
-        console.log('=== pollJob FULL JSON RESPONSE ===');
-        console.log(JSON.stringify(data, null, 2));
-        console.log('  data.issues:', data.issues);
-        console.log('  data.can_continue:', data.can_continue);
-        console.log('  data.pending_ack_ids:', data.pending_ack_ids);
-        console.log('  data.final_status:', data.final_status);
-        // #endregion
+        // Debug logging (minimal)
+        console.log('[POLL]', data.status, 'elapsed:', Date.now() - processingStart, 'ms');
         
-        // Debug logging
-        console.log('[DEBUG] pollJob response:', {
-            status: data.status,
-            result: data.result,
-            normalized_url: data.normalized_url,
-            preview_url: data.preview_url,
-            ok: data.ok
-        });
-        
-        // preview_url data içinde varsa set et (gecikmeli gelirse)
-        if (data.preview_url) {
-            currentPreviewUrl = data.preview_url;
-            setPreview(data.preview_url);
-        }
-        
-        // Processing aşamasında sweep her zaman aktif kalsın
+        // Processing aşamasında scan animasyonu aktif kalsın
         setOverlayMode("processing");
         
-        // Handle queued status - reset backoff when queued
+        // Handle queued status
         if (data.status === "queued") {
-            console.log(`[POLLING] Job queued at position ${data.queue_position}`);
-            // Keep polling but don't show error
+            console.log(`[POLL] Job queued at position ${data.queue_position}`);
             scheduleNextPoll(jobId);
             return;
         }
@@ -695,10 +746,10 @@ async function pollJob(jobId) {
             return;
         }
         
+        // Handle DONE status
         if (data.status === "done") {
+            jobDone = true;
             backendDonePayload = data;
-            
-            // Interval'ı durdur
             stopPolling();
             
             // Log timing info if available
@@ -709,31 +760,40 @@ async function pollJob(jobId) {
             // Log warning if DB save failed (but don't block user)
             if (data.db_saved === false) {
                 console.warn('[WARNING] Job completed but DB save failed:', data.db_error);
-                console.warn('[WARNING] User can still download/preview. Retries may be happening server-side.');
             }
             
-            const finish = () => {
+            // Calculate remaining time until MIN_SCAN_MS
+            const elapsed = Date.now() - processingStart;
+            const remaining = MIN_SCAN_MS - elapsed;
+            
+            console.log(`[FLOW] Backend DONE. Elapsed: ${elapsed}ms, Remaining: ${remaining}ms`);
+            
+            // goStep3 function - transition to result screen
+            const goStep3 = () => {
                 if (uiTimer) {
                     clearInterval(uiTimer);
                     uiTimer = null;
                 }
-                stopScanLoop(); // Aynı anda biter
+                stopScanLoop();
+                
+                // Transition immediately (max 150ms for CSS transition)
                 showResultScreen(backendDonePayload);
             };
             
-            const elapsed = Date.now() - processingStart;
-            // Clamp processing time: min 5s, max 12s
-            const clampedElapsed = Math.max(MIN_PROCESSING_MS, Math.min(MAX_PROCESSING_MS, elapsed));
-            const waitMore = Math.max(0, clampedElapsed - elapsed);
-            
-            // Ensure scan completes before showing result
-            const scanElapsed = Date.now() - scanStartTime;
-            const scanWait = Math.max(0, SCAN_DURATION_MS - scanElapsed);
-            const totalWait = Math.max(waitMore, scanWait);
-            
-            setTimeout(finish, totalWait);
-            
-        } else if (data.status === "not_found") {
+            if (remaining > 0) {
+                // Wait for remaining time then go to Step 3
+                console.log(`[FLOW] Waiting ${remaining}ms before Step 3...`);
+                setTimeout(goStep3, remaining);
+            } else {
+                // MIN time already passed, go immediately
+                console.log('[FLOW] MIN time passed, going to Step 3 immediately');
+                goStep3();
+            }
+            return;
+        }
+        
+        // Handle not_found status
+        if (data.status === "not_found") {
             stopPolling();
             if (uiTimer) {
                 clearInterval(uiTimer);
@@ -742,26 +802,48 @@ async function pollJob(jobId) {
             stopScanLoop();
             setOverlayMode("done");
             alert('Job bulunamadı');
-        } else if (data.status === "FAIL" || data.status === "failed") {
-            // Job failed - stop polling and show error
-            stopPolling();
-            if (uiTimer) {
-                clearInterval(uiTimer);
-                uiTimer = null;
-            }
-            stopScanLoop();
-            backendDonePayload = data;
-            showResultScreen(data);
-        } else if (data.status === "error") {
-            // Server error - schedule retry with backoff
-            console.log('[POLLING] Server error, retrying...');
-            scheduleNextPoll(jobId);
-        } else {
-            // Unknown status - continue polling
-            scheduleNextPoll(jobId);
+            return;
         }
+        
+        // Handle FAIL status
+        if (data.status === "FAIL" || data.status === "failed") {
+            jobDone = true;
+            backendDonePayload = data;
+            stopPolling();
+            
+            // For FAIL, also wait for min time
+            const elapsed = Date.now() - processingStart;
+            const remaining = MIN_SCAN_MS - elapsed;
+            
+            const goStep3Fail = () => {
+                if (uiTimer) {
+                    clearInterval(uiTimer);
+                    uiTimer = null;
+                }
+                stopScanLoop();
+                showResultScreen(data);
+            };
+            
+            if (remaining > 0) {
+                setTimeout(goStep3Fail, remaining);
+            } else {
+                goStep3Fail();
+            }
+            return;
+        }
+        
+        // Handle error status - retry
+        if (data.status === "error") {
+            console.log('[POLL] Server error, retrying...');
+            scheduleNextPoll(jobId);
+            return;
+        }
+        
+        // Unknown status - continue polling
+        scheduleNextPoll(jobId);
+        
     } catch (error) {
-        console.error('Polling error:', error);
+        console.error('[POLL] Error:', error);
         // Network error - schedule retry with backoff
         scheduleNextPoll(jobId);
     }
@@ -1890,11 +1972,9 @@ function showProcessedResult(jobId, outputUrl) {
     console.log('  - outputUrl:', outputUrl);
     console.log('  - paymentsEnabled:', isPaymentsEnabled());
     
-    // If payments disabled, show free download UI
-    if (!isPaymentsEnabled()) {
-        showFreeDownloadResult(jobId, outputUrl);
-        return;
-    }
+    // ALWAYS show payment UI - even if payments disabled
+    // (disabled payments = button disabled + "bakım" note)
+    const paymentsActive = isPaymentsEnabled();
     
     // Get prices from Stripe config
     const prices = stripeConfig?.prices || {
@@ -2260,13 +2340,15 @@ function showProcessedResult(jobId, outputUrl) {
                     <!-- CTA Button -->
                     <button 
                         id="payNowBtn"
-                        class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-lg rounded-xl transition-all duration-200 shadow-lg shadow-emerald-600/20 hover:shadow-emerald-600/30 hover:scale-[1.02] flex items-center justify-center gap-2"
+                        class="w-full py-4 ${paymentsActive ? 'bg-emerald-600 hover:bg-emerald-700 hover:scale-[1.02]' : 'bg-slate-400 cursor-not-allowed'} text-white font-bold text-lg rounded-xl transition-all duration-200 shadow-lg flex items-center justify-center gap-2"
+                        ${paymentsActive ? '' : 'disabled'}
                     >
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
                         </svg>
-                        Şimdi ödeyin
+                        ${paymentsActive ? 'Şimdi ödeyin' : 'Ödeme kapalı'}
                     </button>
+                    ${!paymentsActive ? '<p class="text-xs text-center text-amber-600 mt-2">⚠️ Ödeme sistemi şu an bakımda</p>' : ''}
                 </div>
                 
                 <!-- Trust Badges Grid -->
@@ -2322,13 +2404,15 @@ function showProcessedResult(jobId, outputUrl) {
             </div>
             <button 
                 id="mobilePayBtn"
-                class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-lg rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg"
+                class="w-full py-4 ${paymentsActive ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-400 cursor-not-allowed'} text-white font-bold text-lg rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg"
+                ${paymentsActive ? '' : 'disabled'}
             >
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
                 </svg>
-                Şimdi ödeyin
+                ${paymentsActive ? 'Şimdi ödeyin' : 'Ödeme kapalı'}
             </button>
+            ${!paymentsActive ? '<p class="text-xs text-center text-amber-600 mt-2">⚠️ Ödeme sistemi şu an bakımda</p>' : ''}
         </div>
     `;
     
