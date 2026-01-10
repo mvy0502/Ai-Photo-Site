@@ -297,10 +297,21 @@ def get_config_summary() -> Dict[str, Any]:
     service_key = get_env("SUPABASE_SERVICE_ROLE_KEY")
     bucket = get_env("SUPABASE_STORAGE_BUCKET", default="photos")
     
+    # Track which vars are missing for clearer debugging
+    storage_missing = []
+    if not supabase_url:
+        storage_missing.append("SUPABASE_URL")
+    if not service_key:
+        storage_missing.append("SUPABASE_SERVICE_ROLE_KEY")
+    
+    summary["storage_missing_vars"] = storage_missing
+    summary["storage_bucket"] = bucket  # Always show bucket config
+    
     if supabase_url and service_key:
         summary["storage_configured"] = True
-        summary["storage_bucket"] = bucket
         summary["supabase_project_ref"] = extract_project_ref(supabase_url)
+    else:
+        summary["supabase_project_ref"] = extract_project_ref(supabase_url) if supabase_url else None
     
     # Payments
     stripe_secret = get_env("STRIPE_SECRET_KEY")

@@ -98,7 +98,7 @@ async def startup_event():
     success, message = await db_manager.initialize()
     if success:
         print(f"✅ Database: {message}")
-    else:
+                    else:
         print(f"⚠️ Database: {message}")
         print("   App will continue without database. Some features may be unavailable.")
 
@@ -527,12 +527,12 @@ def process_job(job_id: str, saved_file_path: str):
     print(f"🔵 [FINAL_STATUS] Job {job_id} - {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
     
     # Preview URL'yi koru (orijinal fotoğraf)
-    if preview_url:
-        analyze_result["preview_url"] = preview_url
+        if preview_url:
+            analyze_result["preview_url"] = preview_url
         analyze_result["preview_image"] = preview_url
-        if "overlay" in analyze_result:
-            analyze_result["overlay"]["preview_url"] = preview_url
-    
+            if "overlay" in analyze_result:
+                analyze_result["overlay"]["preview_url"] = preview_url
+        
     # Compute DB fields
     final_status = analyze_result.get("final_status", "UNKNOWN")
     db_status = {
@@ -707,7 +707,7 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
         try:
             db_saved = loop.run_until_complete(save_to_db())
             print(f"✅ [DB] Job {job_id} saved to database")
-        except Exception as e:
+            except Exception as e:
             print(f"⚠️ [DB] Failed to save job {job_id}: {e}")
         finally:
             loop.close()
@@ -905,7 +905,7 @@ async def process_photo(job_id: str, request: ProcessRequest):
     # Re-run V2 analysis with acknowledged_ids
     if USE_V2_ANALYZER:
         analyze_result = analyze_image_v2(job_id, saved_file_path, acknowledged_ids=acknowledged_ids)
-    else:
+        else:
         # V1 doesn't support acknowledged_ids
         analyze_result = current_job
     
@@ -943,8 +943,8 @@ async def process_photo(job_id: str, request: ProcessRequest):
         analyze_result["photoroom_error"] = "API key not configured"
         analyze_result["processed"] = False
         analyze_result["status"] = "done"
-        return JSONResponse({
-            "success": True,
+    return JSONResponse({
+        "success": True,
             "job": analyze_result,
             "warning": "PhotoRoom not configured - returning validation only"
         })
@@ -1045,8 +1045,8 @@ async def process_photo(job_id: str, request: ProcessRequest):
         analyze_result["status"] = "done"
         
         if is_rate_limit:
-            return JSONResponse({
-                "success": False,
+        return JSONResponse({
+            "success": False,
                 "error": "PhotoRoom API rate limited. Please try again later.",
                 "error_code": "RATE_LIMITED",
                 "job": analyze_result
@@ -1150,12 +1150,12 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
         else:
             # Fallback: Local filesystem storage
             saved_file_path = f"uploads/{job_id}{ext}"
-            with open(saved_file_path, "wb") as buffer:
-                buffer.write(content)
-            
+        with open(saved_file_path, "wb") as buffer:
+            buffer.write(content)
+        
             original_image_path = saved_file_path
-            preview_url = f"/uploads/{job_id}{ext}"
-            
+        preview_url = f"/uploads/{job_id}{ext}"
+        
             print(f"✅ [UPLOAD] Stored locally: {saved_file_path}")
         
         # Job'u veritabanında oluştur
@@ -1640,7 +1640,8 @@ async def config_check():
             "configured": summary["storage_configured"],
             "bucket": summary["storage_bucket"],
             "project_ref": summary["supabase_project_ref"],
-            "warnings": summary["supabase_warnings"]
+            "warnings": summary["supabase_warnings"],
+            "missing_vars": summary.get("storage_missing_vars", [])
         },
         "payments": {
             "enabled": summary["payments_enabled"]
