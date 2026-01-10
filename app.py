@@ -733,10 +733,39 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
         
         print(f"🔵 [BG_DB] Saving job {job_id} to database...")
         
+        conn = None
+        cur = None
+        
         try:
-            conn = psycopg2.connect(psycopg_url, connect_timeout=30)
-            cur = conn.cursor()
+            # Step 1: Connect with timeout
+            print(f"🔵 [BG_DB_1] Creating connection...")
+            conn = psycopg2.connect(
+                psycopg_url, 
+                connect_timeout=10,
+                options='-c statement_timeout=30000'  # 30 second statement timeout
+            )
+            conn.autocommit = False  # Explicit transaction control
+            print(f"🔵 [BG_DB_2] Connection created")
             
+            # Step 2: Create cursor
+            print(f"🔵 [BG_DB_3] Creating cursor...")
+            cur = conn.cursor()
+            print(f"🔵 [BG_DB_4] Cursor created")
+            
+            # Step 3: Test connection with simple query
+            print(f"🔵 [BG_DB_5] Testing connection with SELECT 1...")
+            cur.execute("SELECT 1")
+            test_result = cur.fetchone()
+            print(f"🔵 [BG_DB_6] Connection test OK: {test_result}")
+            
+            # Step 4: Prepare data
+            print(f"🔵 [BG_DB_7] Preparing UPDATE data...")
+            analysis_json = json.dumps(analyze_result, default=str)
+            requires_ack_json = json.dumps(requires_ack_ids)
+            print(f"🔵 [BG_DB_8] JSON prepared (analysis: {len(analysis_json)} bytes)")
+            
+            # Step 5: Execute UPDATE
+            print(f"🔵 [BG_DB_9] Executing UPDATE...")
             cur.execute("""
                 UPDATE jobs 
                 SET status = %s,
@@ -748,21 +777,65 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
                 WHERE id = %s::uuid
             """, (
                 db_status,
-                json.dumps(analyze_result, default=str),
-                json.dumps(requires_ack_ids),
+                analysis_json,
+                requires_ack_json,
                 can_continue,
                 job_id
             ))
+            rows_affected = cur.rowcount
+            print(f"🔵 [BG_DB_10] UPDATE executed, rows affected: {rows_affected}")
             
+            # Step 6: Commit
+            print(f"🔵 [BG_DB_11] Committing transaction...")
             conn.commit()
-            cur.close()
-            conn.close()
+            print(f"🔵 [BG_DB_12] Transaction committed")
             
             db_saved = True
             print(f"✅ [BG_DONE] Job {job_id} saved - status: {db_status}")
             
+        except psycopg2.OperationalError as e:
+            print(f"🔴 [BG_DB_FAIL] Connection/Operational error for job {job_id}: {e}")
+            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                    
+        except psycopg2.Error as e:
+            print(f"🔴 [BG_DB_FAIL] Database error for job {job_id}: {e}")
+            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                    
         except Exception as e:
-            print(f"🔴 [BG_DB_FAIL] Failed to save job {job_id}: {e}")
+            print(f"🔴 [BG_DB_FAIL] Unexpected error for job {job_id}: {e}")
+            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                    
+        finally:
+            # ALWAYS close cursor and connection
+            print(f"🔵 [BG_DB_CLEANUP] Cleaning up database resources...")
+            if cur:
+                try:
+                    cur.close()
+                    print(f"🔵 [BG_DB_CLEANUP] Cursor closed")
+                except Exception as e:
+                    print(f"⚠️ [BG_DB_CLEANUP] Error closing cursor: {e}")
+            if conn:
+                try:
+                    conn.close()
+                    print(f"🔵 [BG_DB_CLEANUP] Connection closed")
+                except Exception as e:
+                    print(f"⚠️ [BG_DB_CLEANUP] Error closing connection: {e}")
+            print(f"🔵 [BG_DB_CLEANUP] Done")
     else:
         print(f"🔴 [BG_DB_FAIL] No DATABASE_URL configured")
     
