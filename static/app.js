@@ -1653,14 +1653,14 @@ function showValidationResultScreen(jobData, previewUrl) {
                 </div>
             </div>
             
-            <!-- RIGHT COLUMN: Photo Preview (Locked/Blurry) -->
+            <!-- RIGHT COLUMN: Photo Preview -->
             <div class="lg:w-[450px] bg-slate-50 p-8 lg:p-12 flex items-center justify-center border-t lg:border-t-0 lg:border-l border-slate-200">
                 <div class="relative">
                     <!-- Dimension Labels -->
                     <div class="absolute -top-8 left-1/2 -translate-x-1/2 text-sm text-slate-500 font-medium">50 mm</div>
                     <div class="absolute top-1/2 -right-12 -translate-y-1/2 text-sm text-slate-500 font-medium transform rotate-90 origin-center">60 mm</div>
                     
-                    <!-- Photo Frame with Locked Preview -->
+                    <!-- Photo Frame -->
                     <div class="relative border-2 border-dashed border-slate-300 p-2 rounded-lg bg-white shadow-lg">
                         <!-- Corner Marks -->
                         <div class="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-slate-400"></div>
@@ -1668,33 +1668,16 @@ function showValidationResultScreen(jobData, previewUrl) {
                         <div class="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-slate-400"></div>
                         <div class="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-slate-400"></div>
                         
-                        <!-- Preview Container -->
-                        <div class="relative w-[200px] h-[240px] rounded overflow-hidden">
-                            <!-- Blurred Photo -->
-                            <img 
-                                src="${previewUrl}" 
-                                alt="Fotoğraf önizleme"
-                                class="w-full h-full object-cover"
-                                style="filter: blur(8px); transform: scale(1.05);"
-                            >
-                            
-                            <!-- Lock Overlay -->
-                            <div class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/30 backdrop-blur-[2px]">
-                                <div class="w-12 h-12 bg-white/90 rounded-2xl shadow-lg flex items-center justify-center mb-2">
-                                    <svg class="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-                                    </svg>
-                                </div>
-                                <span class="text-white text-sm font-medium drop-shadow">Kilitli önizleme</span>
-                            </div>
-                        </div>
+                        <img 
+                            src="${previewUrl}" 
+                            alt="Fotoğraf önizleme"
+                            class="w-[200px] h-[240px] object-cover rounded"
+                        >
+                        
                     </div>
                     
-                    <!-- Info text -->
-                    <p class="text-center text-xs text-slate-400 mt-4">Ödeme sonrası netleşir</p>
-                    
                     <!-- PhotoAiD.com watermark style -->
-                    <p class="text-center text-xs text-slate-400 mt-1">BiyometrikFoto.tr</p>
+                    <p class="text-center text-xs text-slate-400 mt-4">BiyometrikFoto.tr</p>
                 </div>
             </div>
         </div>
