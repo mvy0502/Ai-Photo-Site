@@ -62,14 +62,14 @@ const wizardSteps = [
 // ============================================================================
 // Processing Steps & Timing (Sprint 2)
 // ============================================================================
-const MIN_PROCESSING_MS = 5000; // Minimum processing süresi (5 saniye)
-const MAX_PROCESSING_MS = 12000; // Maximum processing süresi (12 saniye)
-const SCAN_DURATION_MS = 7500; // Scan animasyonu süresi (7.5 saniye)
+const MIN_PROCESSING_MS = 1500; // Minimum processing süresi (1.5 saniye - faster UX)
+const MAX_PROCESSING_MS = 8000; // Maximum processing süresi (8 saniye)
+const SCAN_DURATION_MS = 2500; // Scan animasyonu süresi (2.5 saniye - faster UX)
 const STEP_POINTS = [
-    { key: "crop", t: 1500 },      // 1.5s
-    { key: "bg_remove", t: 3000 }, // 3.0s
-    { key: "resize", t: 4500 },    // 4.5s
-    { key: "analyze", t: 6000 }    // 6.0s (scan bitmeden önce bitmeli)
+    { key: "crop", t: 400 },       // 0.4s - faster
+    { key: "bg_remove", t: 800 },  // 0.8s - faster
+    { key: "resize", t: 1200 },    // 1.2s - faster
+    { key: "analyze", t: 1800 }    // 1.8s - finishes before scan ends
 ];
 
 const processingSteps = [
@@ -96,6 +96,7 @@ let currentWizardStep = 0;
 let currentJobId = null;
 let currentImageUrl = null;
 let currentPreviewUrl = null;
+let serverPreviewUrl = null;  // Supabase signed URL (for processed result)
 let processingStepIndex = 0;
 let processingInterval = null;
 let pollingInterval = null;
@@ -296,9 +297,12 @@ async function handleUpload(event) {
         
         currentJobId = data.job_id;
         
-        // Use preview_url from backend if available, otherwise use blob URL
-        const previewUrl = data.preview_url || currentImageUrl;
-        currentPreviewUrl = previewUrl;
+        // ALWAYS use local blob URL for fast preview during processing
+        // Server URL (Supabase signed URL) is slow and unnecessary for preview
+        currentPreviewUrl = currentImageUrl;  // Use local blob, not server URL
+        
+        // Store server preview URL for later (if needed)
+        serverPreviewUrl = data.preview_url;
         
         // Reset state
         processingStart = null;
