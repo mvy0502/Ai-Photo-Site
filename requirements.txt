@@ -18,6 +18,7 @@ stripe
 # Database
 sqlalchemy[asyncio]
 asyncpg
+psycopg2-binary
 
 # Auth & Utils
 PyJWT
