@@ -184,11 +184,9 @@ def _format_job_response(db_job: dict) -> dict:
     job_id = str(db_job.get("id", ""))
     original_path = db_job.get("original_image_path", "")
     
-    # Extract extension from original path
-    ext = ".jpg"
-    if original_path:
-        ext = os.path.splitext(original_path)[1] or ".jpg"
-    preview_url = f"/uploads/{job_id}{ext}" if job_id else None
+    # Use /api/preview/{job_id} endpoint which handles both Supabase and local storage
+    # This endpoint returns a redirect to either a signed URL or local file
+    preview_url = f"/api/preview/{job_id}" if job_id else None
     
     response = {
         # Core status
@@ -890,18 +888,37 @@ async def process_photo(job_id: str, request: ProcessRequest):
     # Build current_job from DB
     current_job = db_job.get("analysis_result") or {}
     original_path = db_job.get("original_image_path", "")
-    ext = os.path.splitext(original_path)[1] or ".jpg"
-    current_job["preview_url"] = f"/uploads/{job_id}{ext}"
     
-    # Get the original file path
-    # Job ID format: uuid + extension stored in uploads/
-    uploads_dir = Path("uploads")
-    job_files = list(uploads_dir.glob(f"{job_id}.*"))
+    # Use /api/preview endpoint for preview URL (handles both Supabase and local)
+    current_job["preview_url"] = f"/api/preview/{job_id}"
     
-    if not job_files:
+    # Get the original file - check both Supabase and local storage
+    saved_file_path = None
+    image_bytes = None
+    
+    # Check if stored in Supabase Storage
+    if original_path.startswith("originals/") and is_storage_configured():
+        # Download from Supabase
+        from utils.supabase_storage import download_bytes_sync
+        content, err = download_bytes_sync(original_path)
+        if content:
+            # Save temporarily for analysis
+            ext = os.path.splitext(original_path)[1] or ".jpg"
+            saved_file_path = f"uploads/{job_id}{ext}"
+            with open(saved_file_path, "wb") as f:
+                f.write(content)
+            image_bytes = content
+    else:
+        # Local storage - find the file
+        uploads_dir = Path("uploads")
+        job_files = list(uploads_dir.glob(f"{job_id}.*"))
+        if job_files:
+            saved_file_path = str(job_files[0])
+    
+    if not saved_file_path:
         return JSONResponse({
             "success": False,
-            "error": "Original file not found"
+            "error": "Orijinal dosya bulunamadı"
         }, status_code=404)
     
     saved_file_path = str(job_files[0])
@@ -1147,12 +1164,6 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
             
             # Store object key in DB (not local path)
             original_image_path = object_key
-            
-            # Create signed URL for preview (1 hour)
-            preview_url, _ = await create_signed_url(object_key, 3600)
-            if not preview_url:
-                preview_url = f"/api/preview/{job_id}"  # Fallback to API
-            
             print(f"✅ [UPLOAD] Stored in Supabase: {object_key}")
         else:
             # Fallback: Local filesystem storage
@@ -1161,9 +1172,11 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
                 buffer.write(content)
             
             original_image_path = saved_file_path
-            preview_url = f"/uploads/{job_id}{ext}"
-            
             print(f"✅ [UPLOAD] Stored locally: {saved_file_path}")
+        
+        # Always use /api/preview endpoint - it handles both Supabase and local storage
+        # and generates fresh signed URLs when needed
+        preview_url = f"/api/preview/{job_id}"
         
         # Job'u veritabanında oluştur
         db_job, db_error = await create_job_safe(
