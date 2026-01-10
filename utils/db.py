@@ -1,6 +1,18 @@
 """
 Supabase PostgreSQL Database Connection
 Uses async SQLAlchemy + asyncpg
+
+PgBouncer Compatibility:
+- Disables asyncpg prepared statement cache (critical for transaction pooling)
+- Uses conservative pool sizes for Render free tier
+- Supports env toggles for fine-tuning
+
+Environment Variables:
+- DATABASE_URL: Required connection string
+- DB_DISABLE_PREPARED_STATEMENTS: Set to "true" to disable asyncpg statement cache (recommended for PgBouncer)
+- DB_POOL_SIZE: Connection pool size (default: 2)
+- DB_MAX_OVERFLOW: Max overflow connections (default: 3)
+- DB_POOL_PRE_PING: Enable connection health checks (default: true)
 """
 
 import os
@@ -11,6 +23,7 @@ from urllib.parse import urlparse, urlunparse
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 
 # Import sanitized env helpers
 from utils.env_config import get_env, get_database_url, validate_database_url, mask_url_credentials
@@ -19,6 +32,35 @@ load_dotenv()
 
 # Environment variable names (for documentation)
 REQUIRED_ENV_VARS = ["DATABASE_URL"]
+
+# PgBouncer / Pooler configuration
+def _get_pool_config() -> dict:
+    """Get database pool configuration from environment."""
+    disable_prepared = get_env("DB_DISABLE_PREPARED_STATEMENTS", default="true").lower() == "true"
+    pool_size = int(get_env("DB_POOL_SIZE", default="2"))
+    max_overflow = int(get_env("DB_MAX_OVERFLOW", default="3"))
+    pool_pre_ping = get_env("DB_POOL_PRE_PING", default="true").lower() == "true"
+    
+    return {
+        "disable_prepared_statements": disable_prepared,
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "pool_pre_ping": pool_pre_ping
+    }
+
+def _get_connect_args(disable_prepared: bool) -> dict:
+    """
+    Get asyncpg connection arguments.
+    
+    Critical for PgBouncer: Disable prepared statement cache to avoid
+    'prepared statement X already exists' errors in transaction pooling mode.
+    """
+    if disable_prepared:
+        return {
+            "statement_cache_size": 0,  # Disable prepared statement cache
+            "prepared_statement_cache_size": 0,  # Redundant but explicit
+        }
+    return {}
 
 
 def normalize_database_url(url: str) -> str:
@@ -90,14 +132,27 @@ class DatabaseManager:
         if not database_url:
             return False, "DATABASE_URL environment variable is not set"
         
-        # Try primary connection (port 5432)
+        # Get pool configuration
+        pool_config = _get_pool_config()
+        connect_args = _get_connect_args(pool_config["disable_prepared_statements"])
+        
+        # Log configuration (non-secret)
+        print(f"🔧 [DB CONFIG] Pool size: {pool_config['pool_size']}, "
+              f"max_overflow: {pool_config['max_overflow']}, "
+              f"pre_ping: {pool_config['pool_pre_ping']}, "
+              f"disable_prepared_statements: {pool_config['disable_prepared_statements']}")
+        
+        # Try primary connection
         try:
             normalized_url = normalize_database_url(database_url)
+            parsed = urlparse(normalized_url)
+            
             self.engine = create_async_engine(
                 normalized_url,
-                pool_pre_ping=True,
-                pool_size=5,
-                max_overflow=10,
+                pool_pre_ping=pool_config["pool_pre_ping"],
+                pool_size=pool_config["pool_size"],
+                max_overflow=pool_config["max_overflow"],
+                connect_args=connect_args,
                 echo=False  # Set to True for SQL debugging
             )
             
@@ -112,19 +167,20 @@ class DatabaseManager:
                 expire_on_commit=False
             )
             
-            parsed = urlparse(normalized_url)
+            url_type = "pooler" if parsed.port == 6543 or "pooler" in (parsed.hostname or "") else "direct"
             self.connection_info = {
-                "url_type": "direct",
+                "url_type": url_type,
                 "port": parsed.port or 5432,
-                "connected": True
+                "connected": True,
+                "prepared_statements_disabled": pool_config["disable_prepared_statements"]
             }
             
-            return True, f"Connected via direct connection (port {self.connection_info['port']})"
+            return True, f"Connected via {url_type} (port {self.connection_info['port']}, prepared_stmts={not pool_config['disable_prepared_statements']})"
             
         except Exception as e:
             error_msg = str(e)
             # Sanitize error message to not expose secrets
-            sanitized_error = re.sub(r'://[^@]+@', '://***:***@', error_msg)
+            sanitized_error = mask_url_credentials(error_msg)
             
             # Try pooler fallback if available
             pooler_url = get_pooler_url(database_url)
@@ -133,9 +189,10 @@ class DatabaseManager:
                     normalized_pooler = normalize_database_url(pooler_url)
                     self.engine = create_async_engine(
                         normalized_pooler,
-                        pool_pre_ping=True,
-                        pool_size=5,
-                        max_overflow=10,
+                        pool_pre_ping=pool_config["pool_pre_ping"],
+                        pool_size=pool_config["pool_size"],
+                        max_overflow=pool_config["max_overflow"],
+                        connect_args=connect_args,
                         echo=False
                     )
                     
@@ -152,13 +209,14 @@ class DatabaseManager:
                     self.connection_info = {
                         "url_type": "pooler",
                         "port": 6543,
-                        "connected": True
+                        "connected": True,
+                        "prepared_statements_disabled": pool_config["disable_prepared_statements"]
                     }
                     
-                    return True, "Connected via session pooler (port 6543)"
+                    return True, f"Connected via session pooler (port 6543, prepared_stmts={not pool_config['disable_prepared_statements']})"
                     
                 except Exception as pooler_error:
-                    pooler_sanitized = re.sub(r'://[^@]+@', '://***:***@', str(pooler_error))
+                    pooler_sanitized = mask_url_credentials(str(pooler_error))
                     return False, f"Direct failed: {sanitized_error[:100]}. Pooler also failed: {pooler_sanitized[:100]}"
             
             return False, f"Connection failed: {sanitized_error[:200]}"

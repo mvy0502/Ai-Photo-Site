@@ -126,6 +126,11 @@ async def health_db():
     """
     Database health check endpoint.
     Executes SELECT 1 and returns connection status.
+    
+    Returns:
+    - ok: bool - Whether SELECT 1 succeeded
+    - db: int - Result of SELECT 1 (should be 1)
+    - connection_info: dict - URL type, port, and prepared statement cache status
     """
     if not db_manager.connection_info.get("connected"):
         return JSONResponse({
@@ -134,6 +139,7 @@ async def health_db():
             "connection_info": {
                 "url_type": db_manager.connection_info.get("url_type", "unknown"),
                 "port": db_manager.connection_info.get("port"),
+                "prepared_statements_disabled": db_manager.connection_info.get("prepared_statements_disabled", False)
             }
         }, status_code=503)
     
@@ -145,6 +151,7 @@ async def health_db():
             "connection_info": {
                 "url_type": db_manager.connection_info.get("url_type"),
                 "port": db_manager.connection_info.get("port"),
+                "prepared_statements_disabled": db_manager.connection_info.get("prepared_statements_disabled", False)
             }
         })
     except Exception as e:
