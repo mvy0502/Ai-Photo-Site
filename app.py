@@ -1603,8 +1603,9 @@ async def storage_health():
         config = _get_config()
         bucket = config["bucket"]
         
-        # Try to list (will fail if bucket doesn't exist or no access)
-        result = client.storage.from_(bucket).list(limit=1)
+        # Try to list root of bucket (will fail if bucket doesn't exist or no access)
+        # Note: No 'limit' param - not supported in supabase-py storage3
+        result = client.storage.from_(bucket).list(path="")
         
         return JSONResponse({
             "ok": True,
