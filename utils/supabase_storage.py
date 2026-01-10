@@ -20,14 +20,23 @@ from utils.env_config import get_env, get_supabase_url, sanitize_url
 
 # Lazy imports to avoid startup failures when env vars not set
 _supabase_client = None
+_config_cache = None
+_config_warned = False
 
 
 def _get_config() -> dict:
-    """Get Supabase configuration from environment (sanitized)."""
+    """Get Supabase configuration from environment (sanitized). Cached after first call."""
+    global _config_cache, _config_warned
+    
+    if _config_cache is not None:
+        return _config_cache
+    
     # Get sanitized SUPABASE_URL
     url, warnings = get_supabase_url(required=False)
-    for warning in warnings:
-        print(f"⚠️ [STORAGE CONFIG] {warning}")
+    if not _config_warned:
+        for warning in warnings:
+            print(f"⚠️ [STORAGE CONFIG] {warning}")
+        _config_warned = True
     
     # Get other config values with sanitization
     service_role_key = get_env("SUPABASE_SERVICE_ROLE_KEY", default="")
@@ -40,12 +49,13 @@ def _get_config() -> dict:
         print(f"⚠️ [STORAGE CONFIG] Invalid TTL value '{ttl_str}', using default 86400")
         ttl = 86400
     
-    return {
+    _config_cache = {
         "url": url or "",
         "service_role_key": service_role_key or "",
         "bucket": bucket,
         "signed_url_ttl": ttl,
     }
+    return _config_cache
 
 
 def is_storage_configured() -> bool:

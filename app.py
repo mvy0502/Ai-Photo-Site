@@ -1283,8 +1283,12 @@ async def process_photo(job_id: str, request: ProcessRequest):
     
     print(f"🔵 [APP] Processing job {job_id} with acknowledged_ids: {acknowledged_ids}")
     
-    # Re-run V2 analysis with acknowledged_ids
-    if USE_V2_ANALYZER:
+    # Optimization: Skip re-analysis if acknowledged_ids is empty and analysis already exists
+    if not acknowledged_ids and current_job.get("final_status"):
+        print(f"🔵 [APP] Using cached analysis result for {job_id}")
+        analyze_result = current_job
+    elif USE_V2_ANALYZER:
+        # Re-run V2 analysis with acknowledged_ids
         analyze_result = analyze_image_v2(job_id, saved_file_path, acknowledged_ids=acknowledged_ids)
     else:
         # V1 doesn't support acknowledged_ids
@@ -1337,22 +1341,20 @@ async def process_photo(job_id: str, request: ProcessRequest):
     
     # Determine storage backend
     use_supabase = is_storage_configured()
-    original_path = db_job.get("original_image_path", "")
     
     try:
-        # Load image - handle both local and Supabase storage
-        if use_supabase and original_path.startswith("originals/"):
-            # Download from Supabase Storage (use async version - we're in async endpoint)
-            image_bytes, download_error = await download_bytes(original_path)
-            if download_error or not image_bytes:
-                raise ValueError(f"Could not download from storage: {download_error}")
-            
-            # Decode bytes to image
+        # Load image - reuse already downloaded image_bytes or read from local file
+        if image_bytes:
+            # Already downloaded from Supabase earlier
             nparr = np.frombuffer(image_bytes, np.uint8)
             image_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         else:
-            # Local file
+            # Local file - read and cache bytes
             image_bgr = cv2.imread(saved_file_path)
+            if image_bgr is not None:
+                # Read bytes for later use
+                with open(saved_file_path, "rb") as f:
+                    image_bytes = f.read()
         
         if image_bgr is None:
             raise ValueError("Could not load image")
