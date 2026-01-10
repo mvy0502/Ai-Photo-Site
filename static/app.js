@@ -476,13 +476,19 @@ function showFinalCheckSpinner() {
     
     const spinnerDiv = document.createElement('div');
     spinnerDiv.id = 'finalCheckSpinner';
-    spinnerDiv.className = 'flex items-center gap-3 py-2 text-slate-500';
+    spinnerDiv.className = 'flex items-center gap-4 mt-4 pt-4 border-t border-slate-100';
     spinnerDiv.innerHTML = `
-        <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <span class="text-sm">Son kontrol yapılıyor...</span>
+        <div class="flex-shrink-0">
+            <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                <svg class="w-5 h-5 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24" style="animation: spin 1s linear infinite;">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+        </div>
+        <div class="flex-1">
+            <p class="font-medium text-blue-600">Son kontrol yapılıyor...</p>
+        </div>
     `;
     progressSteps.appendChild(spinnerDiv);
 }
@@ -1726,7 +1732,7 @@ function showValidationResultScreen(jobData, previewUrl) {
                 <div class="mt-8 flex flex-col sm:flex-row gap-4">
                     ${!hasFail ? `
                         <button id="proceedToCheckoutBtn" class="flex-1 py-4 px-6 bg-slate-900 hover:bg-slate-800 text-white font-bold text-lg rounded-xl transition-all ${hasWarn ? 'opacity-50 cursor-not-allowed' : ''}" ${hasWarn ? 'disabled' : ''}>
-                            Ödeme işlemine geçin
+                            ${stripeConfig?.enabled ? 'Ödeme işlemine geçin' : 'Devam et'}
                         </button>
                     ` : ''}
                     <button id="retakePhotoValidationBtn" class="flex-1 py-4 px-6 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-lg rounded-xl border-2 border-slate-200 transition-all">
@@ -1809,7 +1815,7 @@ function showValidationResultScreen(jobData, previewUrl) {
             console.log('[Validation] Proceed button clicked, disabled:', proceedBtn.disabled);
             if (proceedBtn.disabled) return;
             
-            // Show processing state
+            // Show processing state on button briefly
             proceedBtn.disabled = true;
             proceedBtn.innerHTML = `
                 <svg class="w-5 h-5 animate-spin inline-block mr-2" fill="none" viewBox="0 0 24 24">
@@ -1819,8 +1825,8 @@ function showValidationResultScreen(jobData, previewUrl) {
                 İşleniyor...
             `;
             
-            // Start processing and then show checkout
-            processPhotoAndShowCheckout(currentJobId, acknowledgedIssueIds);
+            // IMPORTANT: Start Step 2 (processing animation) with blur preview
+            startStep2ProcessingWithBlur(currentJobId, acknowledgedIssueIds, previewUrl);
         });
     }
     
@@ -1846,8 +1852,108 @@ function showValidationResultScreen(jobData, previewUrl) {
     resultModal.classList.remove('hidden');
 }
 
-// Process photo and then show checkout screen
-async function processPhotoAndShowCheckout(jobId, acknowledgedIds) {
+// ============================================================================
+// Step 2 Processing with Blur Preview (from validation screen)
+// ============================================================================
+// State for Step 2 -> Step 3 transition
+let step2StartTime = null;
+let step2BackendDone = false;
+let step2ProcessedUrl = null;
+let step2JobId = null;
+
+async function startStep2ProcessingWithBlur(jobId, acknowledgedIds, originalPreviewUrl) {
+    console.log('[Step2] Starting processing animation for job:', jobId);
+    
+    // Reset state
+    step2StartTime = Date.now();
+    step2BackendDone = false;
+    step2ProcessedUrl = null;
+    step2JobId = jobId;
+    scanMinDone = false;
+    jobDone = false;
+    
+    // Close validation result modal
+    closeResultModal();
+    
+    // Open processing modal with blur preview
+    if (!processingModal) {
+        console.error('[Step2] Processing modal not found');
+        return;
+    }
+    
+    // Reset step states
+    stepStates = {};
+    processingSteps.forEach(step => {
+        stepStates[step.key] = "pending";
+    });
+    
+    // Remove any existing lock overlay
+    removeLockOverlay();
+    
+    // Show processing modal
+    processingModal.classList.remove('hidden');
+    
+    // Set BLURRED preview (user sees blur during processing)
+    setStep2BlurredPreview(originalPreviewUrl);
+    
+    // Start scan animation
+    setOverlayMode("processing");
+    startScanLoop();
+    
+    // Start processing timer
+    processingStart = Date.now();
+    
+    // UI timer: update checklist every 100ms
+    if (uiTimer) clearInterval(uiTimer);
+    uiTimer = setInterval(() => {
+        const elapsed = Date.now() - processingStart;
+        updateChecklistByElapsed(elapsed);
+        
+        // Check if we should transition to Step 3
+        checkStep2ToStep3Transition();
+    }, 100);
+    
+    renderProcessingSteps();
+    
+    // Start backend request in background
+    fetchProcessResult(jobId, acknowledgedIds);
+}
+
+// Set blurred preview for Step 2
+function setStep2BlurredPreview(previewUrl) {
+    const previewImage = document.getElementById('previewImage');
+    const previewPlaceholder = document.getElementById('previewPlaceholder');
+    const previewContainer = document.getElementById('previewContainer');
+    
+    if (previewUrl && previewImage && previewPlaceholder) {
+        previewImage.src = previewUrl;
+        previewImage.classList.remove('hidden');
+        previewPlaceholder.classList.add('hidden');
+        
+        // Apply blur during Step 2 processing
+        previewImage.style.filter = 'blur(10px)';
+        previewImage.style.transform = 'scale(1.02)';
+        
+        // Add processing overlay (scan bar will be visible)
+        if (previewContainer && !document.getElementById('step2ProcessingOverlay')) {
+            const overlay = document.createElement('div');
+            overlay.id = 'step2ProcessingOverlay';
+            overlay.className = 'absolute inset-0 bg-slate-900/20 z-5 pointer-events-none';
+            previewContainer.appendChild(overlay);
+        }
+    }
+}
+
+// Remove Step 2 processing overlay
+function removeStep2ProcessingOverlay() {
+    const overlay = document.getElementById('step2ProcessingOverlay');
+    if (overlay) overlay.remove();
+}
+
+// Fetch process result from backend (non-blocking)
+async function fetchProcessResult(jobId, acknowledgedIds) {
+    console.log('[Step2] Fetching /process result for job:', jobId);
+    
     try {
         const response = await fetch(`/process/${jobId}`, {
             method: 'POST',
@@ -1856,22 +1962,81 @@ async function processPhotoAndShowCheckout(jobId, acknowledgedIds) {
         });
         
         const data = await response.json();
-        console.log('[processPhotoAndShowCheckout] Response:', data);
+        console.log('[Step2] Backend response:', data);
         
-        if (data.success && data.job?.processed_url) {
-            // Show checkout with processed image
-            showProcessedResult(jobId, data.job.processed_url);
-        } else if (data.success && data.job) {
-            // Fallback - use preview URL
-            const previewUrl = data.job.preview_url || `/uploads/${jobId}.jpeg`;
-            showProcessedResult(jobId, previewUrl);
+        if (data.success) {
+            step2BackendDone = true;
+            step2ProcessedUrl = data.job?.processed_url || data.job?.preview_url || `/api/preview/${jobId}`;
+            jobDone = true;
+            console.log('[Step2] Backend done, processed URL:', step2ProcessedUrl);
         } else {
-            alert('Fotoğraf işlenirken bir hata oluştu: ' + (data.error || 'Bilinmeyen hata'));
+            console.error('[Step2] Backend error:', data.error);
+            step2BackendDone = true;
+            step2ProcessedUrl = null;
+            // Will show error on transition
         }
     } catch (error) {
-        console.error('[processPhotoAndShowCheckout] Error:', error);
-        alert('Bir hata oluştu. Lütfen tekrar deneyin.');
+        console.error('[Step2] Fetch error:', error);
+        step2BackendDone = true;
+        step2ProcessedUrl = null;
     }
+}
+
+// Check if we should transition from Step 2 to Step 3
+function checkStep2ToStep3Transition() {
+    if (!processingStart) return;
+    
+    const elapsed = Date.now() - processingStart;
+    const minTimePassed = elapsed >= MIN_SCAN_MS;
+    
+    // Update scanMinDone flag
+    if (minTimePassed && !scanMinDone) {
+        scanMinDone = true;
+        console.log('[Step2] Minimum time elapsed:', elapsed, 'ms');
+    }
+    
+    // Transition when BOTH conditions are met:
+    // 1. Minimum 7.5s has passed
+    // 2. Backend has responded
+    if (minTimePassed && step2BackendDone) {
+        console.log('[Step2] Both conditions met, transitioning to Step 3');
+        transitionToStep3();
+    }
+}
+
+// Transition to Step 3 (checkout/result)
+function transitionToStep3() {
+    // Clear timers
+    if (uiTimer) {
+        clearInterval(uiTimer);
+        uiTimer = null;
+    }
+    stopScanLoop();
+    removeStep2ProcessingOverlay();
+    removeFinalCheckSpinner();
+    
+    // Close processing modal
+    closeProcessingModal();
+    
+    // Show Step 3
+    if (step2ProcessedUrl) {
+        showProcessedResult(step2JobId, step2ProcessedUrl);
+    } else {
+        // Error case - show alert and go back to home
+        alert('Fotoğraf işlenirken bir hata oluştu. Lütfen tekrar deneyin.');
+        window.location.href = '/';
+    }
+    
+    // Reset state
+    step2StartTime = null;
+    step2BackendDone = false;
+    step2ProcessedUrl = null;
+}
+
+// Legacy function - kept for backward compatibility
+async function processPhotoAndShowCheckout(jobId, acknowledgedIds) {
+    // Redirect to new function with current preview
+    startStep2ProcessingWithBlur(jobId, acknowledgedIds, currentPreviewUrl);
 }
 
 /**
