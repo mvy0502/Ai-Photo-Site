@@ -48,6 +48,9 @@ from utils.db_jobs import (
     JobStatus, PaymentState, DatabaseError,
     DEV_ALLOW_MEMORY_FALLBACK
 )
+from utils.job_queue import get_job_queue, init_job_queue, JobState
+from utils.rate_limiter import get_rate_limiter, get_status_cache
+from utils.db_pool import get_db_pool, close_db_pool
 
 # Feature flag for V2 analyzer
 USE_V2_ANALYZER = True
@@ -90,21 +93,50 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database connection and validate configuration on startup."""
+    """Initialize database connection, job queue, and validate configuration on startup."""
     # Run config validation first
     startup_validation()
     
-    # Initialize database
+    # Initialize async database (for API reads)
     success, message = await db_manager.initialize()
     if success:
-        print(f"✅ Database: {message}")
+        print(f"✅ Database (async): {message}")
     else:
-        print(f"⚠️ Database: {message}")
+        print(f"⚠️ Database (async): {message}")
         print("   App will continue without database. Some features may be unavailable.")
+    
+    # Initialize sync DB pool (for background worker writes)
+    print("📦 [STARTUP] Initializing DB connection pool...")
+    pool = get_db_pool()
+    if pool and pool.is_initialized():
+        print("✅ [STARTUP] DB pool ready")
+    else:
+        print("⚠️ [STARTUP] DB pool not available (will use direct connections)")
+    
+    # Initialize job queue with worker
+    print("📦 [STARTUP] Initializing job queue...")
+    init_job_queue(process_job_worker)
+    print("✅ [STARTUP] Job queue ready")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Close database connections on shutdown."""
+    """Close database connections and stop job queue on shutdown."""
+    # Stop job queue
+    try:
+        queue = get_job_queue()
+        queue.stop_worker()
+        print("🛑 Job queue stopped.")
+    except:
+        pass
+    
+    # Close sync DB pool
+    try:
+        close_db_pool()
+        print("🔌 DB pool closed.")
+    except:
+        pass
+    
+    # Close async database
     await db_manager.close()
     print("🔌 Database connections closed.")
 
@@ -113,12 +145,25 @@ async def health():
     """
     Basic health check endpoint for load balancers and uptime monitoring.
     Returns minimal info without exposing internals.
+    
+    CRITICAL: Must return immediately (<100ms).
+    Does NOT touch DB, Storage, or external APIs.
     """
     return JSONResponse({
         "status": "ok",
         "service": "biyometrikfoto-api",
         "version": PIPELINE_VERSION
     })
+
+
+@app.get("/api/queue/stats", response_class=JSONResponse)
+async def queue_stats():
+    """
+    Get queue statistics for monitoring.
+    """
+    queue = get_job_queue()
+    stats = queue.get_queue_stats()
+    return JSONResponse(stats)
 
 
 @app.get("/api/health/db", response_class=JSONResponse)
@@ -712,7 +757,7 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
             "preview_image": preview_url
         }
     
-    # Step 3: Save to DB
+    # Step 3: Save to DB using connection pool
     final_status = analyze_result.get("final_status", "UNKNOWN")
     db_status = {
         "PASS": JobStatus.PASS,
@@ -726,123 +771,160 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     ]
     can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
     
-    database_url, _ = get_database_url(required=False)
+    print(f"🔵 [BG_DB] Saving job {job_id} to database...")
     
-    if database_url:
-        psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
-        
-        print(f"🔵 [BG_DB] Saving job {job_id} to database...")
-        
-        conn = None
-        cur = None
+    # Try to use connection pool first
+    pool = get_db_pool()
+    
+    if pool and pool.is_initialized():
+        print(f"🔵 [BG_DB_1] Using connection pool...")
         
         try:
-            # Step 1: Connect with timeout
-            print(f"🔵 [BG_DB_1] Creating connection...")
-            conn = psycopg2.connect(
-                psycopg_url, 
-                connect_timeout=10,
-                options='-c statement_timeout=30000'  # 30 second statement timeout
-            )
-            conn.autocommit = False  # Explicit transaction control
-            print(f"🔵 [BG_DB_2] Connection created")
-            
-            # Step 2: Create cursor
-            print(f"🔵 [BG_DB_3] Creating cursor...")
-            cur = conn.cursor()
-            print(f"🔵 [BG_DB_4] Cursor created")
-            
-            # Step 3: Test connection with simple query
-            print(f"🔵 [BG_DB_5] Testing connection with SELECT 1...")
-            cur.execute("SELECT 1")
-            test_result = cur.fetchone()
-            print(f"🔵 [BG_DB_6] Connection test OK: {test_result}")
-            
-            # Step 4: Prepare data
-            print(f"🔵 [BG_DB_7] Preparing UPDATE data...")
+            # Prepare data
             analysis_json = json.dumps(analyze_result, default=str)
             requires_ack_json = json.dumps(requires_ack_ids)
-            print(f"🔵 [BG_DB_8] JSON prepared (analysis: {len(analysis_json)} bytes)")
+            print(f"🔵 [BG_DB_2] JSON prepared (analysis: {len(analysis_json)} bytes)")
             
-            # Step 5: Execute UPDATE
-            print(f"🔵 [BG_DB_9] Executing UPDATE...")
-            cur.execute("""
-                UPDATE jobs 
-                SET status = %s,
-                    analysis_result = %s::jsonb,
-                    requires_ack_ids = %s::jsonb,
-                    acknowledged_issue_ids = '[]'::jsonb,
-                    can_continue = %s,
-                    updated_at = NOW()
-                WHERE id = %s::uuid
-            """, (
-                db_status,
-                analysis_json,
-                requires_ack_json,
-                can_continue,
-                job_id
-            ))
-            rows_affected = cur.rowcount
-            print(f"🔵 [BG_DB_10] UPDATE executed, rows affected: {rows_affected}")
-            
-            # Step 6: Commit
-            print(f"🔵 [BG_DB_11] Committing transaction...")
-            conn.commit()
-            print(f"🔵 [BG_DB_12] Transaction committed")
-            
-            db_saved = True
-            print(f"✅ [BG_DONE] Job {job_id} saved - status: {db_status}")
-            
-        except psycopg2.OperationalError as e:
-            print(f"🔴 [BG_DB_FAIL] Connection/Operational error for job {job_id}: {e}")
-            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
-            if conn:
-                try:
-                    conn.rollback()
-                except:
-                    pass
+            # Use pool with automatic retry
+            with pool.get_connection() as conn:
+                print(f"🔵 [BG_DB_3] Got connection from pool")
+                
+                with conn.cursor() as cur:
+                    # Test connection
+                    cur.execute("SELECT 1")
+                    print(f"🔵 [BG_DB_4] Connection test OK")
                     
-        except psycopg2.Error as e:
-            print(f"🔴 [BG_DB_FAIL] Database error for job {job_id}: {e}")
-            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
-            if conn:
-                try:
-                    conn.rollback()
-                except:
-                    pass
+                    # Execute UPDATE
+                    print(f"🔵 [BG_DB_5] Executing UPDATE...")
+                    cur.execute("""
+                        UPDATE jobs 
+                        SET status = %s,
+                            analysis_result = %s::jsonb,
+                            requires_ack_ids = %s::jsonb,
+                            acknowledged_issue_ids = '[]'::jsonb,
+                            can_continue = %s,
+                            updated_at = NOW()
+                        WHERE id = %s::uuid
+                    """, (
+                        db_status,
+                        analysis_json,
+                        requires_ack_json,
+                        can_continue,
+                        job_id
+                    ))
+                    rows_affected = cur.rowcount
+                    print(f"🔵 [BG_DB_6] UPDATE executed, rows affected: {rows_affected}")
+                    
+                    # Commit
+                    print(f"🔵 [BG_DB_7] Committing...")
+                    conn.commit()
+                    print(f"🔵 [BG_DB_8] Committed")
+                    
+                    db_saved = True
+                    print(f"✅ [BG_DONE] Job {job_id} saved via pool - status: {db_status}")
                     
         except Exception as e:
-            print(f"🔴 [BG_DB_FAIL] Unexpected error for job {job_id}: {e}")
+            print(f"🔴 [BG_DB_FAIL] Pool error for job {job_id}: {e}")
             print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
-            if conn:
-                try:
-                    conn.rollback()
-                except:
-                    pass
-                    
-        finally:
-            # ALWAYS close cursor and connection
-            print(f"🔵 [BG_DB_CLEANUP] Cleaning up database resources...")
-            if cur:
-                try:
-                    cur.close()
-                    print(f"🔵 [BG_DB_CLEANUP] Cursor closed")
-                except Exception as e:
-                    print(f"⚠️ [BG_DB_CLEANUP] Error closing cursor: {e}")
-            if conn:
-                try:
-                    conn.close()
-                    print(f"🔵 [BG_DB_CLEANUP] Connection closed")
-                except Exception as e:
-                    print(f"⚠️ [BG_DB_CLEANUP] Error closing connection: {e}")
-            print(f"🔵 [BG_DB_CLEANUP] Done")
+            
     else:
-        print(f"🔴 [BG_DB_FAIL] No DATABASE_URL configured")
+        # Fallback: direct connection (no pool available)
+        database_url, _ = get_database_url(required=False)
+        
+        if database_url:
+            psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
+            print(f"🔵 [BG_DB_FALLBACK] Using direct connection (no pool)...")
+            
+            conn = None
+            cur = None
+            
+            try:
+                conn = psycopg2.connect(
+                    psycopg_url, 
+                    connect_timeout=10,
+                    options='-c statement_timeout=30000'
+                )
+                conn.autocommit = False
+                cur = conn.cursor()
+                
+                analysis_json = json.dumps(analyze_result, default=str)
+                requires_ack_json = json.dumps(requires_ack_ids)
+                
+                cur.execute("""
+                    UPDATE jobs 
+                    SET status = %s,
+                        analysis_result = %s::jsonb,
+                        requires_ack_ids = %s::jsonb,
+                        acknowledged_issue_ids = '[]'::jsonb,
+                        can_continue = %s,
+                        updated_at = NOW()
+                    WHERE id = %s::uuid
+                """, (
+                    db_status,
+                    analysis_json,
+                    requires_ack_json,
+                    can_continue,
+                    job_id
+                ))
+                
+                conn.commit()
+                db_saved = True
+                print(f"✅ [BG_DONE] Job {job_id} saved via direct conn - status: {db_status}")
+                
+            except Exception as e:
+                print(f"🔴 [BG_DB_FAIL] Direct conn error for job {job_id}: {e}")
+                print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+                if conn:
+                    try:
+                        conn.rollback()
+                    except:
+                        pass
+                        
+            finally:
+                if cur:
+                    try:
+                        cur.close()
+                    except:
+                        pass
+                if conn:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+        else:
+            print(f"🔴 [BG_DB_FAIL] No DATABASE_URL configured")
     
     # Clear from processing cache
     _processing_jobs.pop(job_id, None)
     
+    # Invalidate status cache after processing
+    try:
+        status_cache = get_status_cache()
+        status_cache.invalidate(job_id)
+    except:
+        pass
+    
     return db_saved
+
+
+def process_job_worker(job_id: str, object_key: str, ext: str) -> bool:
+    """
+    Worker function called by job queue.
+    Wraps process_job_with_path and returns success boolean.
+    
+    This function runs in the queue worker thread (not the main event loop).
+    """
+    print(f"⚙️ [WORKER] Starting job {job_id}")
+    
+    try:
+        success = process_job_with_path(job_id, object_key, ext)
+        print(f"✅ [WORKER] Job {job_id} completed - success: {success}")
+        return success
+    except Exception as e:
+        print(f"🔴 [WORKER] Job {job_id} exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -933,18 +1015,64 @@ async def job_page(request: Request, job_id: str):
     })
 
 @app.get("/job/{job_id}/status", response_class=JSONResponse)
-async def job_status_endpoint(job_id: str):
+async def job_status_endpoint(job_id: str, request: Request):
     """
     Job status'u JSON olarak döndür.
     
     Production behavior:
-    - DB-first reads (no memory precedence)
-    - Returns 404 if job not found
-    - Returns 503 if DB error (unless DEV_ALLOW_MEMORY_FALLBACK=true)
+    - Rate limited (1 request/second per job_id)
+    - Cached responses (1s TTL)
+    - Checks queue status first, then DB
+    - Returns 429 if polling too fast
     """
+    # Rate limiting - prevent aggressive polling
+    rate_limiter = get_rate_limiter()
+    allowed, retry_after = rate_limiter.check(f"status:{job_id}")
+    
+    if not allowed:
+        return JSONResponse({
+            "status": "rate_limited",
+            "error": "Too many requests. Please slow down.",
+            "retry_after": retry_after
+        }, status_code=429, headers={"Retry-After": str(int(retry_after + 1))})
+    
+    # Check cache first
+    status_cache = get_status_cache()
+    cached = status_cache.get(job_id)
+    if cached:
+        return JSONResponse(cached)
+    
+    # Check queue status first (most recent state)
+    job_queue = get_job_queue()
+    queue_status = job_queue.get_status(job_id)
+    
+    if queue_status:
+        state = queue_status.get("state")
+        
+        if state == JobState.QUEUED.value:
+            response = {
+                "status": "queued",
+                "queue_position": queue_status.get("queue_position", 0),
+                "message": "Fotoğrafınız sırada bekliyor..."
+            }
+            status_cache.set(job_id, response)
+            return JSONResponse(response)
+        
+        elif state == JobState.PROCESSING.value:
+            response = {
+                "status": "processing",
+                "message": "Fotoğrafınız analiz ediliyor..."
+            }
+            status_cache.set(job_id, response)
+            return JSONResponse(response)
+        
+        # If DONE or FAILED, fall through to DB check for full result
+    
     # Check if job is currently being processed (brief window)
     if job_id in _processing_jobs:
-        return JSONResponse(_processing_jobs[job_id])
+        response = _processing_jobs[job_id]
+        status_cache.set(job_id, response)
+        return JSONResponse(response)
     
     # DB-first read
     db_job, error = await get_job_safe(job_id)
@@ -967,6 +1095,12 @@ async def job_status_endpoint(job_id: str):
     
     # Format and return
     response = _format_job_response(db_job)
+    
+    # Cache final states longer
+    final_status = response.get("status", "")
+    if final_status in ["PASS", "WARN", "FAIL", "done"]:
+        status_cache.set(job_id, response)
+    
     return JSONResponse(response)
 
 
@@ -1317,13 +1451,18 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
             "preview_url": preview_url
         }
         
-        # Background task ile process_job başlat
-        # Pass only object_key - NOT raw bytes (which breaks BackgroundTasks)
-        if use_supabase:
-            background_tasks.add_task(process_job_with_path, job_id, object_key, ext)
-        else:
-            # Local storage fallback - pass local path
-            background_tasks.add_task(process_job_with_path, job_id, original_image_path, ext)
+        # Add job to queue (not direct BackgroundTasks - prevents overload)
+        # Queue processes jobs sequentially to prevent Render health check failures
+        job_queue = get_job_queue()
+        path_to_process = object_key if use_supabase else original_image_path
+        queued = job_queue.enqueue(job_id, path_to_process, ext)
+        
+        if not queued:
+            print(f"⚠️ [UPLOAD] Job {job_id} already in queue")
+        
+        # Get queue stats for response
+        queue_stats = job_queue.get_queue_stats()
+        queue_position = queue_stats.get("queue_size", 0)
         
         # Başarılı yükleme - JSON response
         return JSONResponse({
@@ -1331,6 +1470,7 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
             "job_id": job_id,
             "preview_url": preview_url,
             "storage": "supabase" if use_supabase else "local",
+            "queue_position": queue_position,
             "message": "Fotoğraf başarıyla yüklendi"
         })
     except Exception as e:

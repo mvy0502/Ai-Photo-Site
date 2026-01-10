@@ -99,6 +99,9 @@ let currentPreviewUrl = null;
 let processingStepIndex = 0;
 let processingInterval = null;
 let pollingInterval = null;
+let pollingDelay = 1000;  // Start at 1s
+let pollingAttempts = 0;
+const POLLING_DELAYS = [1000, 2000, 3000, 5000, 8000];  // Exponential backoff
 let processingStart = 0;
 let backendDonePayload = null;
 let stepStates = {}; // { crop: "pending|processing|done", ... }
@@ -541,20 +544,34 @@ function startPolling() {
         processingStart = startProcessingUI(currentPreviewUrl || currentImageUrl);
     }
     
-    // Polling interval
-    pollingInterval = setInterval(async () => {
-        await pollJob(currentJobId);
-    }, 900);
+    // Reset polling state
+    pollingAttempts = 0;
+    pollingDelay = POLLING_DELAYS[0];
     
-    // İlk kontrol hemen yap
+    // İlk kontrol hemen yap, sonra exponential backoff ile devam et
     pollJob(currentJobId);
+}
+
+function scheduleNextPoll(jobId) {
+    // Calculate next delay with exponential backoff
+    const delayIndex = Math.min(pollingAttempts, POLLING_DELAYS.length - 1);
+    pollingDelay = POLLING_DELAYS[delayIndex];
+    pollingAttempts++;
+    
+    console.log(`[POLLING] Next poll in ${pollingDelay}ms (attempt ${pollingAttempts})`);
+    
+    pollingInterval = setTimeout(async () => {
+        await pollJob(jobId);
+    }, pollingDelay);
 }
 
 function stopPolling() {
     if (pollingInterval) {
-        clearInterval(pollingInterval);
+        clearTimeout(pollingInterval);
         pollingInterval = null;
     }
+    pollingAttempts = 0;
+    pollingDelay = POLLING_DELAYS[0];
 }
 
 async function pollJob(jobId) {
@@ -565,6 +582,15 @@ async function pollJob(jobId) {
     
     try {
         const response = await fetch(`/job/${jobId}/status`);
+        
+        // Handle rate limiting (429)
+        if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After') || 2;
+            console.log(`[POLLING] Rate limited. Retry after ${retryAfter}s`);
+            setTimeout(() => scheduleNextPoll(jobId), retryAfter * 1000);
+            return;
+        }
+        
         const data = await response.json();
         
         // #region agent log - Full JSON response logging
@@ -593,6 +619,20 @@ async function pollJob(jobId) {
         
         // Processing aşamasında sweep her zaman aktif kalsın
         setOverlayMode("processing");
+        
+        // Handle queued status - reset backoff when queued
+        if (data.status === "queued") {
+            console.log(`[POLLING] Job queued at position ${data.queue_position}`);
+            // Keep polling but don't show error
+            scheduleNextPoll(jobId);
+            return;
+        }
+        
+        // Handle processing status - continue polling
+        if (data.status === "processing") {
+            scheduleNextPoll(jobId);
+            return;
+        }
         
         if (data.status === "done") {
             backendDonePayload = data;
@@ -630,9 +670,28 @@ async function pollJob(jobId) {
             stopScanLoop();
             setOverlayMode("done");
             alert('Job bulunamadı');
+        } else if (data.status === "FAIL" || data.status === "failed") {
+            // Job failed - stop polling and show error
+            stopPolling();
+            if (uiTimer) {
+                clearInterval(uiTimer);
+                uiTimer = null;
+            }
+            stopScanLoop();
+            backendDonePayload = data;
+            showResultScreen(data);
+        } else if (data.status === "error") {
+            // Server error - schedule retry with backoff
+            console.log('[POLLING] Server error, retrying...');
+            scheduleNextPoll(jobId);
+        } else {
+            // Unknown status - continue polling
+            scheduleNextPoll(jobId);
         }
     } catch (error) {
         console.error('Polling error:', error);
+        // Network error - schedule retry with backoff
+        scheduleNextPoll(jobId);
     }
 }
 
