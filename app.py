@@ -1279,7 +1279,6 @@ async def process_photo(job_id: str, request: ProcessRequest):
             "error": "Orijinal dosya bulunamadı"
         }, status_code=404)
     
-    saved_file_path = str(job_files[0])
     acknowledged_ids = request.acknowledged_issue_ids
     
     print(f"🔵 [APP] Processing job {job_id} with acknowledged_ids: {acknowledged_ids}")
