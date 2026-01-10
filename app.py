@@ -616,12 +616,17 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
     import tempfile
     import traceback
     
+    print(f"🟢 [BACKGROUND_TASK_START] Job {job_id} - Background task started")
+    print(f"   image_bytes length: {len(image_bytes)}, ext: {ext}, use_supabase: {use_supabase}")
+    
     # Get preview URL from processing cache
     current_status = _processing_jobs.get(job_id, {})
     preview_url = current_status.get("preview_url", None)
     
     # Small delay for UI
     time.sleep(0.5)
+    
+    print(f"🟢 [BACKGROUND_TASK] Job {job_id} - After 0.5s delay, starting processing")
     
     # Initialize analyze_result to handle errors
     analyze_result = None
@@ -1714,6 +1719,29 @@ async def config_check():
         "photoroom": {
             "configured": summary["photoroom_configured"]
         }
+    })
+
+
+@app.get("/api/test/background-task", response_class=JSONResponse)
+async def test_background_task(background_tasks: BackgroundTasks):
+    """
+    Test endpoint to verify background tasks are working.
+    """
+    import time as t
+    
+    test_id = f"test-{int(t.time())}"
+    
+    def simple_bg_task():
+        print(f"🔵 [TEST_BG] Background task {test_id} started")
+        t.sleep(2)
+        print(f"🔵 [TEST_BG] Background task {test_id} completed")
+    
+    background_tasks.add_task(simple_bg_task)
+    
+    return JSONResponse({
+        "ok": True,
+        "test_id": test_id,
+        "message": "Background task scheduled - check logs"
     })
 
 
