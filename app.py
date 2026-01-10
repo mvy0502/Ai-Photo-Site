@@ -1740,6 +1740,37 @@ async def test_background_task(background_tasks: BackgroundTasks):
     })
 
 
+@app.get("/api/test/psycopg2", response_class=JSONResponse)
+async def test_psycopg2():
+    """Test psycopg2 sync connection."""
+    import psycopg2
+    import re
+    from utils.env_config import get_database_url
+    
+    try:
+        database_url, _ = get_database_url(required=False)
+        if not database_url:
+            return JSONResponse({"ok": False, "error": "No DATABASE_URL"})
+        
+        psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
+        
+        conn = psycopg2.connect(psycopg_url, connect_timeout=10)
+        cur = conn.cursor()
+        cur.execute("SELECT 1, NOW()::text")
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        return JSONResponse({"ok": True, "result": list(result)})
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "ok": False, 
+            "error": str(e)[:200],
+            "traceback": traceback.format_exc()[-500:]
+        })
+
+
 @app.post("/api/test/sync-analyze", response_class=JSONResponse)
 async def test_sync_analyze():
     """
