@@ -614,6 +614,7 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
     import json
     import re
     import tempfile
+    import traceback
     
     # Get preview URL from processing cache
     current_status = _processing_jobs.get(job_id, {})
@@ -621,6 +622,10 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
     
     # Small delay for UI
     time.sleep(0.5)
+    
+    # Initialize analyze_result to handle errors
+    analyze_result = None
+    analysis_error = None
     
     # Create a temporary file for analysis (analyzers expect file paths)
     temp_path = None
@@ -646,6 +651,30 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
         
         issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
         print(f"🔵 [FINAL_STATUS] Job {job_id} - {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+        
+    except Exception as e:
+        # Catch any analysis errors and create a fallback result
+        analysis_error = str(e)
+        error_tb = traceback.format_exc()
+        print(f"❌ [ANALYSIS_ERROR] Job {job_id} - Analysis failed: {analysis_error}")
+        print(f"❌ [TRACEBACK] {error_tb}")
+        
+        # Create error result so job doesn't stay stuck in "processing"
+        analyze_result = {
+            "final_status": "FAIL",
+            "issues": [{
+                "id": "ANALYSIS_ERROR",
+                "severity": "FAIL",
+                "title_tr": "Analiz hatası",
+                "message_tr": "Fotoğraf analizi sırasında bir hata oluştu. Lütfen farklı bir fotoğraf deneyin.",
+                "requires_ack": False
+            }],
+            "can_continue": False,
+            "server_can_continue": False,
+            "error": analysis_error,
+            "pipeline_version": PIPELINE_VERSION,
+            "storage_backend": "supabase" if use_supabase else "local"
+        }
         
     finally:
         # Clean up temp file
