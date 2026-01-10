@@ -640,6 +640,17 @@ async function pollJob(jobId) {
             // Interval'ı durdur
             stopPolling();
             
+            // Log timing info if available
+            if (data.timing) {
+                console.log(`[TIMING] download=${data.timing.download_ms}ms, analyze=${data.timing.analyze_ms}ms, db=${data.timing.db_ms}ms, total=${data.timing.total_ms}ms`);
+            }
+            
+            // Log warning if DB save failed (but don't block user)
+            if (data.db_saved === false) {
+                console.warn('[WARNING] Job completed but DB save failed:', data.db_error);
+                console.warn('[WARNING] User can still download/preview. Retries may be happening server-side.');
+            }
+            
             const finish = () => {
                 if (uiTimer) {
                     clearInterval(uiTimer);

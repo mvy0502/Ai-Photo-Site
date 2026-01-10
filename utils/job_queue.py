@@ -6,6 +6,11 @@ Implements a single-worker queue to prevent overload:
 - Jobs are queued with states: QUEUED, PROCESSING, DONE, FAILED
 - Worker runs in background thread, doesn't block event loop
 - Prevents Render health check timeouts and restarts
+
+IMPORTANT: Job completion is NOT dependent on DB writes.
+- Jobs are marked DONE in memory immediately after analysis
+- DB writes happen asynchronously with retry
+- Status endpoint returns DONE even if db_saved=false
 """
 
 import os
@@ -13,11 +18,11 @@ import threading
 import queue
 import time
 import traceback
+import signal
 from typing import Dict, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
-import asyncio
 
 # Configuration
 MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "1"))
@@ -42,6 +47,17 @@ class QueuedJob:
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+    
+    # Timing metrics (milliseconds)
+    download_ms: int = 0
+    analyze_ms: int = 0
+    db_ms: int = 0
+    total_ms: int = 0
+    
+    # DB write status - job completion is NOT dependent on this
+    db_saved: bool = False
+    db_error: Optional[str] = None
+    db_attempts: int = 0
 
 
 class JobQueue:
@@ -89,14 +105,29 @@ class JobQueue:
         self._worker_thread.start()
         print(f"🚀 [QUEUE] Worker started (max_concurrent={self._max_concurrent})")
     
-    def stop_worker(self):
-        """Stop the worker thread gracefully."""
+    def stop_worker(self, timeout: float = 10.0):
+        """
+        Stop the worker thread gracefully.
+        
+        - Signals worker to stop
+        - Waits for current job to finish (up to timeout)
+        - Does not corrupt queue state
+        """
+        print("🛑 [QUEUE] Stopping worker...")
         self._running = False
+        
         # Put a None to unblock the queue
         self._queue.put(None)
-        if self._worker_thread:
-            self._worker_thread.join(timeout=5)
-        print("🛑 [QUEUE] Worker stopped")
+        
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=timeout)
+            
+            if self._worker_thread.is_alive():
+                print("⚠️ [QUEUE] Worker did not stop in time, may still be processing")
+            else:
+                print("✅ [QUEUE] Worker stopped gracefully")
+        else:
+            print("🛑 [QUEUE] Worker was not running")
     
     def enqueue(self, job_id: str, object_key: str, ext: str) -> bool:
         """
@@ -136,7 +167,17 @@ class JobQueue:
                 "started_at": job.started_at.isoformat() if job.started_at else None,
                 "completed_at": job.completed_at.isoformat() if job.completed_at else None,
                 "error": job.error,
-                "queue_position": self._get_queue_position(job_id) if job.state == JobState.QUEUED else None
+                "queue_position": self._get_queue_position(job_id) if job.state == JobState.QUEUED else None,
+                # Timing metrics
+                "timing": {
+                    "download_ms": job.download_ms,
+                    "analyze_ms": job.analyze_ms,
+                    "db_ms": job.db_ms,
+                    "total_ms": job.total_ms
+                },
+                # DB write status - job completion is NOT dependent on this
+                "db_saved": job.db_saved,
+                "db_error": job.db_error
             }
     
     def get_queue_stats(self) -> Dict[str, Any]:
@@ -164,6 +205,52 @@ class JobQueue:
                     return position
                 position += 1
         return 0
+    
+    def update_timing(self, job_id: str, download_ms: int = 0, analyze_ms: int = 0, db_ms: int = 0, total_ms: int = 0):
+        """Update timing metrics for a job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.download_ms = download_ms
+                job.analyze_ms = analyze_ms
+                job.db_ms = db_ms
+                job.total_ms = total_ms
+    
+    def update_db_status(self, job_id: str, db_saved: bool, db_error: Optional[str] = None, db_attempts: int = 0):
+        """Update DB write status for a job (does NOT affect job completion state)."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.db_saved = db_saved
+                job.db_error = db_error
+                job.db_attempts = db_attempts
+    
+    def mark_done(self, job_id: str, result: Optional[Dict[str, Any]] = None):
+        """
+        Mark job as DONE in memory immediately.
+        This happens BEFORE DB write - job completion is NOT dependent on DB.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.state = JobState.DONE
+                job.completed_at = datetime.utcnow()
+                job.result = result
+                print(f"✅ [QUEUE] Job {job_id} marked DONE in memory (db write pending)")
+    
+    def mark_failed(self, job_id: str, error: str, result: Optional[Dict[str, Any]] = None):
+        """
+        Mark job as FAILED in memory immediately.
+        This happens BEFORE DB write - job completion is NOT dependent on DB.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job:
+                job.state = JobState.FAILED
+                job.completed_at = datetime.utcnow()
+                job.error = error
+                job.result = result
+                print(f"❌ [QUEUE] Job {job_id} marked FAILED in memory: {error[:50]}")
     
     def _worker_loop(self):
         """Main worker loop - processes jobs one at a time."""

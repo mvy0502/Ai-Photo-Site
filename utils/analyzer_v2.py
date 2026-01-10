@@ -783,16 +783,16 @@ class FaceLandmarkerAnalyzer:
         Returns all metrics for debugging and decision making.
         """
         default_result = {
-            "sunglasses_score": 0.0,
-            "sunglasses_decision": "pass",
-            "glasses_score": 0.0,
-            "glasses_decision": "pass",
-            "roi_reliability": 0.0,
-            "highlight_ratio": 0.0,
-            "texture_energy": 0.0,
-            "texture_energy_norm": 0.0,
-            "iris_visibility_proxy": 0.0,
-            "darkness_ratio": 0.0,
+                "sunglasses_score": 0.0,
+                "sunglasses_decision": "pass",
+                "glasses_score": 0.0,
+                "glasses_decision": "pass",
+                "roi_reliability": 0.0,
+                "highlight_ratio": 0.0,
+                "texture_energy": 0.0,
+                "texture_energy_norm": 0.0,
+                "iris_visibility_proxy": 0.0,
+                "darkness_ratio": 0.0,
             "edge_density": 0.0,
             # New lens-specific metrics
             "frame_presence_score": 0.0,
@@ -896,7 +896,7 @@ class FaceLandmarkerAnalyzer:
         
         # Low reliability gate: never fail, only warn
         if roi_reliability < 0.50 and sunglasses_decision == "fail":
-            sunglasses_decision = "warn"
+                sunglasses_decision = "warn"
             sunglasses_reason += "_degraded_low_reliability"
         
         # Compute sunglasses_score for backwards compatibility
@@ -914,7 +914,7 @@ class FaceLandmarkerAnalyzer:
         # =====================================================================
         # GLASSES is detected if frame is present but sunglasses is NOT triggered
         
-        glasses_decision = "pass"
+                glasses_decision = "pass"
         glasses_score = frame_presence_score
         
         # Only emit GLASSES if sunglasses not triggered
@@ -1140,13 +1140,55 @@ class FaceLandmarkerAnalyzer:
         return (x_min, y_min, width, height)
 
 
-# Global analyzer instance
+# Global analyzer instance - Thread-safe singleton
+import threading
+import time
+
 _analyzer_instance = None
+_analyzer_lock = threading.Lock()
+_analyzer_init_time_ms = 0
+
 
 def get_analyzer() -> Optional[FaceLandmarkerAnalyzer]:
-    """Get or create analyzer instance"""
-    global _analyzer_instance
-    if _analyzer_instance is None:
+    """
+    Get or create analyzer instance (thread-safe singleton).
+    
+    MediaPipe FaceLandmarker is expensive to initialize (~1-2s).
+    We create it once and reuse for all jobs.
+    """
+    global _analyzer_instance, _analyzer_init_time_ms
+    
+    # Fast path - already initialized
+    if _analyzer_instance is not None and _analyzer_instance.initialized:
+        return _analyzer_instance
+    
+    # Slow path - need to initialize (with lock)
+    with _analyzer_lock:
+        # Double-check after acquiring lock
+        if _analyzer_instance is not None and _analyzer_instance.initialized:
+            return _analyzer_instance
+        
+        print("🔧 [ANALYZER] Initializing MediaPipe FaceLandmarker (one-time)...")
+        start = time.time()
+        
         _analyzer_instance = FaceLandmarkerAnalyzer()
-    return _analyzer_instance if _analyzer_instance.initialized else None
+        
+        _analyzer_init_time_ms = int((time.time() - start) * 1000)
+        
+        if _analyzer_instance.initialized:
+            print(f"✅ [ANALYZER] Ready in {_analyzer_init_time_ms}ms")
+            return _analyzer_instance
+        else:
+            print(f"❌ [ANALYZER] Failed to initialize")
+            return None
+
+
+def get_analyzer_init_time_ms() -> int:
+    """Get the time it took to initialize the analyzer."""
+    return _analyzer_init_time_ms
+
+
+def is_analyzer_ready() -> bool:
+    """Check if analyzer is ready without initializing."""
+    return _analyzer_instance is not None and _analyzer_instance.initialized
 

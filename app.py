@@ -94,8 +94,14 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     """Initialize database connection, job queue, and validate configuration on startup."""
+    import time as startup_time
+    startup_start = startup_time.time()
+    
     # Run config validation first
     startup_validation()
+    
+    # Validate DATABASE_URL format
+    _validate_database_url()
     
     # Initialize async database (for API reads)
     success, message = await db_manager.initialize()
@@ -113,10 +119,57 @@ async def startup_event():
     else:
         print("⚠️ [STARTUP] DB pool not available (will use direct connections)")
     
+    # Pre-warm MediaPipe analyzer (expensive one-time init)
+    print("🔧 [STARTUP] Pre-warming MediaPipe FaceLandmarker...")
+    from utils.analyzer_v2 import get_analyzer, get_analyzer_init_time_ms
+    analyzer = get_analyzer()
+    if analyzer:
+        print(f"✅ [STARTUP] MediaPipe ready (init took {get_analyzer_init_time_ms()}ms)")
+    else:
+        print("⚠️ [STARTUP] MediaPipe not available - analysis will fail")
+    
     # Initialize job queue with worker
     print("📦 [STARTUP] Initializing job queue...")
     init_job_queue(process_job_worker)
     print("✅ [STARTUP] Job queue ready")
+    
+    startup_ms = int((startup_time.time() - startup_start) * 1000)
+    print(f"🚀 [STARTUP] Complete in {startup_ms}ms")
+
+
+def _validate_database_url():
+    """Validate DATABASE_URL and log warnings about pooler vs direct connection."""
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    
+    if not database_url:
+        print("⚠️ [DB_URL] DATABASE_URL not set")
+        return
+    
+    # Parse host from URL
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(database_url)
+        host = parsed.hostname or ""
+        port = parsed.port or 5432
+        
+        is_pooler = "pooler" in host.lower()
+        is_supabase = "supabase" in host.lower()
+        
+        print(f"📊 [DB_URL] Host: {host[:30]}..., Port: {port}")
+        
+        if is_pooler:
+            print("⚠️ [DB_URL] Using Supabase POOLER connection (aws-xxx.pooler.supabase.com)")
+            print("   - Session mode (port 5432): OK for most operations")
+            print("   - Transaction mode (port 6543): May have prepared statement issues")
+            if port == 6543:
+                print("   🔶 RECOMMENDATION: Consider using port 5432 (session mode) for better compatibility")
+        elif is_supabase:
+            print("✅ [DB_URL] Using Supabase DIRECT connection")
+        else:
+            print(f"📊 [DB_URL] Using external database: {host[:20]}...")
+            
+    except Exception as e:
+        print(f"⚠️ [DB_URL] Could not parse DATABASE_URL: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -651,8 +704,11 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     """
     Background task - process job by downloading from storage or reading local file.
     
-    This variant does NOT receive raw bytes (which can break BackgroundTasks).
-    Instead, it downloads/reads the image using the path_or_key.
+    IMPORTANT: Job completion is NOT dependent on DB writes.
+    1. Download image
+    2. Run analysis
+    3. Mark DONE/FAILED in memory IMMEDIATELY
+    4. Attempt DB write (non-blocking - retry on failure)
     
     Args:
         job_id: Job UUID
@@ -665,8 +721,15 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     import tempfile
     import traceback
     import psycopg2
+    import time as timing
     from utils.env_config import get_database_url
     from utils.supabase_storage import download_bytes_sync, is_storage_configured
+    
+    # Timing metrics
+    total_start = timing.time()
+    download_ms = 0
+    analyze_ms = 0
+    db_ms = 0
     
     print(f"🟢 [BG_START] Job {job_id} - path: {path_or_key}, ext: {ext}")
     
@@ -676,9 +739,12 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     # Initialize
     analyze_result = None
     db_saved = False
+    db_error = None
+    job_queue = get_job_queue()
     
     try:
         # Step 1: Get image bytes (from storage or local file)
+        download_start = timing.time()
         is_storage_path = path_or_key.startswith("originals/") or path_or_key.startswith("processed/")
         
         if is_storage_path and is_storage_configured():
@@ -697,14 +763,19 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
             with open(path_or_key, "rb") as f:
                 image_bytes = f.read()
         
-        print(f"🟣 [BG_DOWNLOADED] Got {len(image_bytes)} bytes")
+        download_ms = int((timing.time() - download_start) * 1000)
+        print(f"🟣 [BG_DOWNLOADED] Got {len(image_bytes)} bytes in {download_ms}ms")
         
         # Step 2: Create temp file and run analysis
+        analyze_start = timing.time()
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
                 tmp.write(image_bytes)
                 temp_path = tmp.name
+            
+            # Free memory - don't hold image bytes during analysis
+            image_bytes = None
             
             print(f"🔵 [BG_ANALYZE] Running analyzer on {temp_path}")
             
@@ -719,9 +790,11 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
             analyze_result["storage_backend"] = "supabase"
             
             issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
-            print(f"🔵 [BG_RESULT] {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+            analyze_ms = int((timing.time() - analyze_start) * 1000)
+            print(f"🔵 [BG_RESULT] {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids} ({analyze_ms}ms)")
             
         finally:
+            # Always delete temp file
             if temp_path:
                 try:
                     os.unlink(temp_path)
@@ -757,8 +830,36 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
             "preview_image": preview_url
         }
     
-    # Step 3: Save to DB using connection pool
+    # =================================================================
+    # CRITICAL: Mark job DONE/FAILED in memory BEFORE DB write
+    # Job completion should NOT depend on DB availability
+    # =================================================================
     final_status = analyze_result.get("final_status", "UNKNOWN")
+    
+    # Store result in processing cache for status endpoint
+    _processing_jobs[job_id] = {
+        "status": "done",
+        "final_status": final_status,
+        "result": analyze_result,
+        "preview_url": preview_url,
+        **analyze_result  # Spread all result fields
+    }
+    
+    # Mark in queue (if available)
+    if job_queue:
+        if final_status == "FAIL":
+            job_queue.mark_failed(job_id, analyze_result.get("error", "Unknown error"), analyze_result)
+        else:
+            job_queue.mark_done(job_id, analyze_result)
+    
+    total_before_db = int((timing.time() - total_start) * 1000)
+    print(f"✅ [BG_MEMORY] Job {job_id} marked {final_status} in memory ({total_before_db}ms)")
+    
+    # =================================================================
+    # Step 3: Attempt DB write (non-blocking - job already DONE)
+    # =================================================================
+    db_start = timing.time()
+    
     db_status = {
         "PASS": JobStatus.PASS,
         "WARN": JobStatus.WARN,
@@ -771,31 +872,18 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     ]
     can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
     
-    print(f"🔵 [BG_DB] Saving job {job_id} to database...")
+    print(f"🔵 [BG_DB] Saving job {job_id} to database (non-blocking)...")
     
     # Try to use connection pool first
     pool = get_db_pool()
     
     if pool and pool.is_initialized():
-        print(f"🔵 [BG_DB_1] Using connection pool...")
-        
         try:
-            # Prepare data
             analysis_json = json.dumps(analyze_result, default=str)
             requires_ack_json = json.dumps(requires_ack_ids)
-            print(f"🔵 [BG_DB_2] JSON prepared (analysis: {len(analysis_json)} bytes)")
             
-            # Use pool with automatic retry
             with pool.get_connection() as conn:
-                print(f"🔵 [BG_DB_3] Got connection from pool")
-                
                 with conn.cursor() as cur:
-                    # Test connection
-                    cur.execute("SELECT 1")
-                    print(f"🔵 [BG_DB_4] Connection test OK")
-                    
-                    # Execute UPDATE
-                    print(f"🔵 [BG_DB_5] Executing UPDATE...")
                     cur.execute("""
                         UPDATE jobs 
                         SET status = %s,
@@ -812,29 +900,19 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
                         can_continue,
                         job_id
                     ))
-                    rows_affected = cur.rowcount
-                    print(f"🔵 [BG_DB_6] UPDATE executed, rows affected: {rows_affected}")
-                    
-                    # Commit
-                    print(f"🔵 [BG_DB_7] Committing...")
                     conn.commit()
-                    print(f"🔵 [BG_DB_8] Committed")
-                    
                     db_saved = True
-                    print(f"✅ [BG_DONE] Job {job_id} saved via pool - status: {db_status}")
                     
         except Exception as e:
-            print(f"🔴 [BG_DB_FAIL] Pool error for job {job_id}: {e}")
-            print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+            db_error = str(e)[:200]
+            print(f"⚠️ [BG_DB_FAIL] Pool error (job still DONE): {db_error}")
             
     else:
-        # Fallback: direct connection (no pool available)
+        # Fallback: direct connection
         database_url, _ = get_database_url(required=False)
         
         if database_url:
             psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
-            print(f"🔵 [BG_DB_FALLBACK] Using direct connection (no pool)...")
-            
             conn = None
             cur = None
             
@@ -869,11 +947,10 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
                 
                 conn.commit()
                 db_saved = True
-                print(f"✅ [BG_DONE] Job {job_id} saved via direct conn - status: {db_status}")
                 
             except Exception as e:
-                print(f"🔴 [BG_DB_FAIL] Direct conn error for job {job_id}: {e}")
-                print(f"🔴 [BG_DB_TRACEBACK] {traceback.format_exc()}")
+                db_error = str(e)[:200]
+                print(f"⚠️ [BG_DB_FAIL] Direct conn error (job still DONE): {db_error}")
                 if conn:
                     try:
                         conn.rollback()
@@ -892,10 +969,31 @@ def process_job_with_path(job_id: str, path_or_key: str, ext: str):
                     except:
                         pass
         else:
-            print(f"🔴 [BG_DB_FAIL] No DATABASE_URL configured")
+            db_error = "No DATABASE_URL configured"
+            print(f"⚠️ [BG_DB_FAIL] {db_error} (job still DONE)")
     
-    # Clear from processing cache
-    _processing_jobs.pop(job_id, None)
+    db_ms = int((timing.time() - db_start) * 1000)
+    total_ms = int((timing.time() - total_start) * 1000)
+    
+    # Update job queue with timing and DB status
+    if job_queue:
+        job_queue.update_timing(job_id, download_ms, analyze_ms, db_ms, total_ms)
+        job_queue.update_db_status(job_id, db_saved, db_error)
+    
+    # Add db_saved to processing cache for status endpoint
+    if job_id in _processing_jobs:
+        _processing_jobs[job_id]["db_saved"] = db_saved
+        _processing_jobs[job_id]["db_error"] = db_error
+        _processing_jobs[job_id]["timing"] = {
+            "download_ms": download_ms,
+            "analyze_ms": analyze_ms,
+            "db_ms": db_ms,
+            "total_ms": total_ms
+        }
+    
+    # Log final timing summary
+    print(f"📊 [BG_TIMING] Job {job_id}: download={download_ms}ms, analyze={analyze_ms}ms, db={db_ms}ms, total={total_ms}ms")
+    print(f"✅ [BG_COMPLETE] Job {job_id} - status={final_status}, db_saved={db_saved}")
     
     # Invalidate status cache after processing
     try:
@@ -1066,11 +1164,23 @@ async def job_status_endpoint(job_id: str, request: Request):
             status_cache.set(job_id, response)
             return JSONResponse(response)
         
-        # If DONE or FAILED, fall through to DB check for full result
+        elif state in (JobState.DONE.value, JobState.FAILED.value):
+            # Job completed in queue - check memory first for full result
+            if job_id in _processing_jobs:
+                response = _processing_jobs[job_id].copy()
+                # Include queue-level db_saved status
+                response["db_saved"] = queue_status.get("db_saved", False)
+                response["db_error"] = queue_status.get("db_error")
+                response["timing"] = queue_status.get("timing", {})
+                status_cache.set(job_id, response)
+                return JSONResponse(response)
     
     # Check if job is currently being processed (brief window)
     if job_id in _processing_jobs:
-        response = _processing_jobs[job_id]
+        response = _processing_jobs[job_id].copy()
+        # Ensure db_saved is included
+        response.setdefault("db_saved", True)  # Default to true if not set
+        response.setdefault("db_error", None)
         status_cache.set(job_id, response)
         return JSONResponse(response)
     
