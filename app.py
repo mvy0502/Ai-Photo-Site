@@ -1370,9 +1370,9 @@ async def process_photo(job_id: str, request: ProcessRequest):
         processed_bytes = png_buffer.tobytes()
         
         if use_supabase:
-            # Upload processed image to Supabase Storage
+            # Upload processed image to Supabase Storage (use async versions in async endpoint)
             processed_key = get_object_key("processed", job_id, ".png")
-            stored_key, storage_error = upload_bytes_sync(processed_key, processed_bytes, "image/png")
+            stored_key, storage_error = await upload_bytes(processed_key, processed_bytes, "image/png")
             
             if storage_error:
                 print(f"⚠️ [STORAGE] Failed to upload processed image: {storage_error}")
@@ -1385,7 +1385,7 @@ async def process_photo(job_id: str, request: ProcessRequest):
                 processed_db_path = local_path  # Store local path in DB
             else:
                 # Create signed URL for frontend display (24h)
-                processed_url, _ = create_signed_url_sync(processed_key, 86400)
+                processed_url, _ = await create_signed_url(processed_key, 86400)
                 if not processed_url:
                     processed_url = f"/api/download/{job_id}"
                 processed_db_path = processed_key  # Store object key in DB

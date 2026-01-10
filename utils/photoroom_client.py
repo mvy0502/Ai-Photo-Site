@@ -32,8 +32,11 @@ DEBUG_ENABLED = os.getenv("DEBUG_BG", "0") == "1"
 
 
 def _get_api_key() -> Optional[str]:
-    """Get PhotoRoom API key from environment"""
-    return os.getenv("PHOTOROOM_API_KEY")
+    """Get PhotoRoom API key from environment (strip whitespace/newlines)"""
+    key = os.getenv("PHOTOROOM_API_KEY")
+    if key:
+        key = key.strip()
+    return key if key else None
 
 
 def _get_base_url() -> str:
