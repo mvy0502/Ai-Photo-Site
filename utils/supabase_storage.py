@@ -15,17 +15,36 @@ import os
 from typing import Optional, Tuple
 from functools import lru_cache
 
+# Import sanitized env helpers
+from utils.env_config import get_env, get_supabase_url, sanitize_url
+
 # Lazy imports to avoid startup failures when env vars not set
 _supabase_client = None
 
 
 def _get_config() -> dict:
-    """Get Supabase configuration from environment."""
+    """Get Supabase configuration from environment (sanitized)."""
+    # Get sanitized SUPABASE_URL
+    url, warnings = get_supabase_url(required=False)
+    for warning in warnings:
+        print(f"⚠️ [STORAGE CONFIG] {warning}")
+    
+    # Get other config values with sanitization
+    service_role_key = get_env("SUPABASE_SERVICE_ROLE_KEY", default="")
+    bucket = get_env("SUPABASE_STORAGE_BUCKET", default="photos")
+    ttl_str = get_env("SUPABASE_STORAGE_SIGNED_URL_TTL", default="86400")
+    
+    try:
+        ttl = int(ttl_str)
+    except ValueError:
+        print(f"⚠️ [STORAGE CONFIG] Invalid TTL value '{ttl_str}', using default 86400")
+        ttl = 86400
+    
     return {
-        "url": os.getenv("SUPABASE_URL", ""),
-        "service_role_key": os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
-        "bucket": os.getenv("SUPABASE_STORAGE_BUCKET", "photos"),
-        "signed_url_ttl": int(os.getenv("SUPABASE_STORAGE_SIGNED_URL_TTL", "86400")),
+        "url": url or "",
+        "service_role_key": service_role_key or "",
+        "bucket": bucket,
+        "signed_url_ttl": ttl,
     }
 
 

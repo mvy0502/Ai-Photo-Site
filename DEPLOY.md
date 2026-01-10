@@ -56,6 +56,18 @@ gunicorn app:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind
 
 Set these in Render Dashboard → Environment:
 
+> ⚠️ **Important:** When pasting env vars in Render, ensure there are **no trailing newlines or whitespace**. Copy only the value, not any surrounding whitespace. The app will sanitize common issues but it's best to avoid them.
+
+### Copy-Paste Safe Formats
+
+```
+# DATABASE_URL (use session pooler port 6543 for best compatibility)
+postgresql://postgres.xxxx:[PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres
+
+# SUPABASE_URL (no trailing slash)
+https://xxxx.supabase.co
+```
+
 ### Required
 
 | Variable | Description |
@@ -109,13 +121,14 @@ Set these in Render Dashboard → Environment:
 
 ---
 
-## Health Endpoints
+## Health & Diagnostic Endpoints
 
 | Endpoint | Purpose |
 |----------|---------|
 | `/api/health` | Basic health check (used by Render) |
 | `/api/health/db` | Database connectivity check |
 | `/api/health/storage` | Supabase Storage connectivity check |
+| `/api/config-check` | Configuration summary (non-secret, for debugging) |
 
 ---
 
@@ -137,6 +150,12 @@ curl https://your-app.onrender.com/api/health/db
 ```bash
 curl https://your-app.onrender.com/api/health/storage
 # Expected: {"ok": true, "configured": true, "bucket": "photos"}
+```
+
+### 4. Config Check (debugging)
+```bash
+curl https://your-app.onrender.com/api/config-check
+# Expected: {"db": {"configured": true, "host": "...", "warnings": []}, ...}
 ```
 
 ### 5. Homepage Loads
@@ -177,6 +196,13 @@ curl -I https://your-app.onrender.com/api/download/JOB_ID
 - Check `DATABASE_URL` format: `postgresql://user:pass@host:port/db`
 - Ensure Supabase allows connections from Render IPs
 - Try Session Pooler (port 6543) if direct fails
+- **Check for newlines:** If you see `database "postgres\n" does not exist`, your DATABASE_URL has a trailing newline
+
+### 3. Environment Variable Whitespace Issues
+- Render may display env vars with line breaks - this is just for display
+- When pasting, ensure no trailing newlines or spaces
+- The app sanitizes common issues, but check `/api/config-check` if problems persist
+- Look for warnings in Render logs at startup
 
 ### 3. Static Files Not Loading
 - Verify `app.mount("/static", ...)` is present

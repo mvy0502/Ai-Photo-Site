@@ -36,6 +36,7 @@ from utils.payment import (
 )
 from utils.email_service import send_download_link, is_email_configured
 from utils.db import db_manager
+from utils.env_config import get_config_summary, startup_validation
 from utils.supabase_storage import (
     is_storage_configured, upload_bytes, create_signed_url, download_bytes,
     get_object_key, get_content_type, validate_image_bytes,
@@ -89,7 +90,11 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database connection on startup."""
+    """Initialize database connection and validate configuration on startup."""
+    # Run config validation first
+    startup_validation()
+    
+    # Initialize database
     success, message = await db_manager.initialize()
     if success:
         print(f"✅ Database: {message}")
@@ -1607,6 +1612,43 @@ async def storage_health():
             "error": str(e)[:100],
             "message": "Supabase Storage error"
         })
+
+
+@app.get("/api/config-check", response_class=JSONResponse)
+async def config_check():
+    """
+    Configuration check endpoint for debugging.
+    
+    Returns non-secret configuration summary:
+    - db_configured: bool
+    - db_host: hostname (no credentials)
+    - storage_configured: bool
+    - payments_enabled: bool
+    - photoroom_configured: bool
+    - warnings: list of config warnings
+    """
+    summary = get_config_summary()
+    
+    return JSONResponse({
+        "db": {
+            "configured": summary["db_configured"],
+            "host": summary["db_host"],
+            "port": summary["db_port"],
+            "warnings": summary["db_warnings"]
+        },
+        "storage": {
+            "configured": summary["storage_configured"],
+            "bucket": summary["storage_bucket"],
+            "project_ref": summary["supabase_project_ref"],
+            "warnings": summary["supabase_warnings"]
+        },
+        "payments": {
+            "enabled": summary["payments_enabled"]
+        },
+        "photoroom": {
+            "configured": summary["photoroom_configured"]
+        }
+    })
 
 
 @app.get("/api/config/stripe", response_class=JSONResponse)

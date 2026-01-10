@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
 
+# Import sanitized env helpers
+from utils.env_config import get_env, get_database_url, validate_database_url, mask_url_credentials
+
 load_dotenv()
 
 # Environment variable names (for documentation)
@@ -77,7 +80,12 @@ class DatabaseManager:
         Initialize database connection.
         Returns (success: bool, message: str)
         """
-        database_url = os.getenv("DATABASE_URL")
+        # Get sanitized DATABASE_URL (handles newlines, whitespace, etc.)
+        database_url, warnings = get_database_url(required=False)
+        
+        # Log any warnings
+        for warning in warnings:
+            print(f"⚠️ [DB CONFIG] {warning}")
         
         if not database_url:
             return False, "DATABASE_URL environment variable is not set"
