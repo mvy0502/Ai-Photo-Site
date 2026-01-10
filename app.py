@@ -1740,6 +1740,83 @@ async def test_background_task(background_tasks: BackgroundTasks):
     })
 
 
+@app.post("/api/test/sync-analyze", response_class=JSONResponse)
+async def test_sync_analyze():
+    """
+    Test endpoint to verify analyzer and DB work synchronously.
+    Creates a blank test image, analyzes it, and saves result to DB.
+    """
+    import tempfile
+    import cv2
+    import numpy as np
+    import psycopg2
+    import json
+    
+    from utils.analyze_v2 import analyze_image_v2
+    from utils.env_config import get_database_url
+    
+    results = {
+        "steps": [],
+        "ok": False
+    }
+    
+    # Step 1: Create test image
+    try:
+        test_img = np.zeros((100, 100, 3), dtype=np.uint8)
+        test_img[:] = (255, 255, 255)
+        
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            cv2.imwrite(tmp.name, test_img)
+            temp_path = tmp.name
+        
+        results["steps"].append({"step": "create_image", "ok": True, "path": temp_path})
+    except Exception as e:
+        results["steps"].append({"step": "create_image", "ok": False, "error": str(e)})
+        return JSONResponse(results)
+    
+    # Step 2: Analyze image
+    try:
+        analyze_result = analyze_image_v2("sync-test", temp_path)
+        results["steps"].append({
+            "step": "analyze", 
+            "ok": True, 
+            "final_status": analyze_result.get("final_status"),
+            "issues": [i.get("id") for i in analyze_result.get("issues", [])]
+        })
+    except Exception as e:
+        results["steps"].append({"step": "analyze", "ok": False, "error": str(e)})
+        return JSONResponse(results)
+    finally:
+        import os
+        os.unlink(temp_path)
+    
+    # Step 3: Test DB connection with psycopg2
+    try:
+        database_url, _ = get_database_url(required=False)
+        if not database_url:
+            results["steps"].append({"step": "db", "ok": False, "error": "No DATABASE_URL"})
+            return JSONResponse(results)
+        
+        # Convert to psycopg2 format
+        import re
+        psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
+        
+        conn = psycopg2.connect(psycopg_url)
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        results["steps"].append({"step": "db", "ok": True, "result": result[0]})
+    except Exception as e:
+        results["steps"].append({"step": "db", "ok": False, "error": str(e)[:200]})
+        return JSONResponse(results)
+    
+    results["ok"] = True
+    return JSONResponse(results)
+
+
 @app.get("/api/health/analyzer", response_class=JSONResponse)
 async def analyzer_health():
     """
