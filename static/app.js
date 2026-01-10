@@ -62,14 +62,15 @@ const wizardSteps = [
 // ============================================================================
 // Processing Steps & Timing (Sprint 2)
 // ============================================================================
-const MIN_PROCESSING_MS = 1500; // Minimum processing süresi (1.5 saniye - faster UX)
-const MAX_PROCESSING_MS = 8000; // Maximum processing süresi (8 saniye)
-const SCAN_DURATION_MS = 2500; // Scan animasyonu süresi (2.5 saniye - faster UX)
+// Premium UX timing - slow, deliberate animations for quality perception
+const MIN_PROCESSING_MS = 7000; // Minimum 7 saniye (premium his)
+const MAX_PROCESSING_MS = 15000; // Maximum 15 saniye
+const SCAN_DURATION_MS = 8000; // Scan animasyonu 8 saniye (premium his)
 const STEP_POINTS = [
-    { key: "crop", t: 400 },       // 0.4s - faster
-    { key: "bg_remove", t: 800 },  // 0.8s - faster
-    { key: "resize", t: 1200 },    // 1.2s - faster
-    { key: "analyze", t: 1800 }    // 1.8s - finishes before scan ends
+    { key: "crop", t: 1800 },       // 1.8s - Kırpma tamamlandı
+    { key: "bg_remove", t: 4000 },  // 4.0s - Arka plan kaldırma (~2s sonra)
+    { key: "resize", t: 6000 },     // 6.0s - Yeniden boyutlandırma (~2s sonra)
+    { key: "analyze", t: 7500 }     // 7.5s - Analiz (~1.5s sonra)
 ];
 
 const processingSteps = [
@@ -268,13 +269,21 @@ async function handleUpload(event) {
     const formData = new FormData();
     formData.append('photo', file);
     
-    // Create preview URL
+    // Create preview URL IMMEDIATELY
     if (currentImageUrl) {
         URL.revokeObjectURL(currentImageUrl);
     }
     currentImageUrl = URL.createObjectURL(file);
+    currentPreviewUrl = currentImageUrl;
+    
+    // ✨ PREMIUM UX: Show processing UI IMMEDIATELY before upload
+    // This gives instant feedback and premium feel
+    processingStart = null;
+    backendDonePayload = null;
+    startProcessingUI(currentPreviewUrl);
     
     try {
+        // Upload happens in background while user sees premium animation
         const response = await fetch('/upload', {
             method: 'POST',
             body: formData
@@ -285,34 +294,29 @@ async function handleUpload(event) {
             data = await response.json();
         } catch (e) {
             console.error('JSON parse error:', e);
+            closeProcessingModal();
             alert('Sunucu yanıtı okunamadı. Lütfen tekrar deneyin.');
             return;
         }
         
         if (!response.ok || !data.success) {
             console.error('Upload error:', data);
+            closeProcessingModal();
             alert(data.error || 'Fotoğraf yüklenirken bir hata oluştu');
             return;
         }
         
         currentJobId = data.job_id;
         
-        // ALWAYS use local blob URL for fast preview during processing
-        // Server URL (Supabase signed URL) is slow and unnecessary for preview
-        currentPreviewUrl = currentImageUrl;  // Use local blob, not server URL
-        
         // Store server preview URL for later (if needed)
         serverPreviewUrl = data.preview_url;
         
-        // Reset state
-        processingStart = null;
-        backendDonePayload = null;
-        
-        // Start polling (it will call startProcessingUI)
+        // Start polling for job status (animation already running)
         startPolling();
         
     } catch (error) {
         console.error('Upload error:', error);
+        closeProcessingModal();
         alert('Fotoğraf yüklenirken bir hata oluştu: ' + error.message);
     }
 }
