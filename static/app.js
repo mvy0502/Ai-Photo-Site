@@ -63,14 +63,15 @@ const wizardSteps = [
 // Processing Steps & Timing (Sprint 2)
 // ============================================================================
 // Premium UX timing - slow, deliberate animations for quality perception
-const MIN_PROCESSING_MS = 7000; // Minimum 7 saniye (premium his)
+// CRITICAL: Scan and steps must end at EXACTLY the same time for premium feel
+const MIN_PROCESSING_MS = 7500; // Minimum 7.5 saniye (= step completion)
 const MAX_PROCESSING_MS = 15000; // Maximum 15 saniye
-const SCAN_DURATION_MS = 8000; // Scan animasyonu 8 saniye (premium his)
+const SCAN_DURATION_MS = 7500; // Scan animasyonu = step completion (synchronized)
 const STEP_POINTS = [
     { key: "crop", t: 1800 },       // 1.8s - Kırpma tamamlandı
-    { key: "bg_remove", t: 4000 },  // 4.0s - Arka plan kaldırma (~2s sonra)
-    { key: "resize", t: 6000 },     // 6.0s - Yeniden boyutlandırma (~2s sonra)
-    { key: "analyze", t: 7500 }     // 7.5s - Analiz (~1.5s sonra)
+    { key: "bg_remove", t: 3800 },  // 3.8s - Arka plan kaldırma (~2s sonra)
+    { key: "resize", t: 5800 },     // 5.8s - Yeniden boyutlandırma (~2s sonra)
+    { key: "analyze", t: 7500 }     // 7.5s - Analiz (scan ile aynı anda biter)
 ];
 
 const processingSteps = [
@@ -441,14 +442,64 @@ function updateChecklistByElapsed(elapsed) {
 // ============================================================================
 // Preview Functions
 // ============================================================================
-function setPreview(previewUrl) {
+function setPreview(previewUrl, isLocked = true) {
     const previewImage = document.getElementById('previewImage');
     const previewPlaceholder = document.getElementById('previewPlaceholder');
+    const previewContainer = document.getElementById('previewContainer');
     
     if (previewUrl && previewImage && previewPlaceholder) {
         previewImage.src = previewUrl;
         previewImage.classList.remove('hidden');
         previewPlaceholder.classList.add('hidden');
+        
+        // Apply blur + lock overlay during processing
+        if (isLocked) {
+            previewImage.style.filter = 'blur(8px)';
+            previewImage.style.transform = 'scale(1.05)';
+            
+            // Add lock overlay if not exists
+            if (!document.getElementById('previewLockOverlay')) {
+                const lockOverlay = document.createElement('div');
+                lockOverlay.id = 'previewLockOverlay';
+                lockOverlay.className = 'absolute inset-0 flex flex-col items-center justify-center bg-slate-900/40 backdrop-blur-[2px] z-10 transition-opacity duration-500';
+                lockOverlay.innerHTML = `
+                    <div class="w-16 h-16 bg-white/90 rounded-2xl shadow-xl flex items-center justify-center mb-3 animate-pulse">
+                        <svg class="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                    </div>
+                    <span class="text-white text-sm font-medium drop-shadow-lg">Kilitli önizleme</span>
+                    <span class="text-white/70 text-xs mt-1">İşlem tamamlandığında açılır</span>
+                `;
+                previewContainer.appendChild(lockOverlay);
+            }
+        } else {
+            // Remove blur and lock (processing complete)
+            previewImage.style.filter = 'none';
+            previewImage.style.transform = 'none';
+            
+            const lockOverlay = document.getElementById('previewLockOverlay');
+            if (lockOverlay) {
+                lockOverlay.style.opacity = '0';
+                setTimeout(() => lockOverlay.remove(), 500);
+            }
+        }
+    }
+}
+
+function unlockPreview() {
+    const previewImage = document.getElementById('previewImage');
+    const lockOverlay = document.getElementById('previewLockOverlay');
+    
+    if (previewImage) {
+        previewImage.style.transition = 'filter 0.5s ease, transform 0.5s ease';
+        previewImage.style.filter = 'none';
+        previewImage.style.transform = 'none';
+    }
+    
+    if (lockOverlay) {
+        lockOverlay.style.opacity = '0';
+        setTimeout(() => lockOverlay.remove(), 500);
     }
 }
 
@@ -462,6 +513,8 @@ function setOverlayMode(mode) {
     } else if (mode === "done") {
         aiOverlay.classList.add('aiOverlay--paused');
         aiOverlay.classList.remove('aiOverlay--active');
+        // Unlock preview when processing is done
+        unlockPreview();
     }
 }
 
