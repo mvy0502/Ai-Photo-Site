@@ -98,7 +98,7 @@ async def startup_event():
     success, message = await db_manager.initialize()
     if success:
         print(f"✅ Database: {message}")
-                    else:
+    else:
         print(f"⚠️ Database: {message}")
         print("   App will continue without database. Some features may be unavailable.")
 
