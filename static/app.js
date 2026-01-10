@@ -1765,8 +1765,8 @@ function showValidationResultScreen(jobData, previewUrl) {
         </div>
     `;
     
-    // Update modal size
-    modalContent.className = 'relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-hidden';
+    // Update modal size - use overflow-y-auto so content is scrollable
+    modalContent.className = 'relative bg-white rounded-2xl shadow-2xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-y-auto';
     
     // Wire up event handlers
     document.getElementById('closeValidationBtn')?.addEventListener('click', () => {
@@ -1781,8 +1781,32 @@ function showValidationResultScreen(jobData, previewUrl) {
     
     // Handle proceed to checkout button
     const proceedBtn = document.getElementById('proceedToCheckoutBtn');
+    const checkboxes = document.querySelectorAll('.validation-ack-checkbox');
+    const hasAckRequired = checkboxes.length > 0;
+    
+    console.log('[Validation] proceedBtn:', !!proceedBtn, 'checkboxes:', checkboxes.length, 'hasAckRequired:', hasAckRequired);
+    
+    // Function to update button state based on checkboxes
+    function updateProceedButtonState() {
+        if (!proceedBtn) return;
+        
+        const totalCheckboxes = document.querySelectorAll('.validation-ack-checkbox').length;
+        const checkedCheckboxes = document.querySelectorAll('.validation-ack-checkbox:checked').length;
+        const allAcked = totalCheckboxes === 0 || totalCheckboxes === checkedCheckboxes;
+        
+        console.log('[Validation] Button state update - total:', totalCheckboxes, 'checked:', checkedCheckboxes, 'allAcked:', allAcked);
+        
+        proceedBtn.disabled = !allAcked;
+        proceedBtn.classList.toggle('opacity-50', !allAcked);
+        proceedBtn.classList.toggle('cursor-not-allowed', !allAcked);
+    }
+    
     if (proceedBtn) {
+        // Set initial button state
+        updateProceedButtonState();
+        
         proceedBtn.addEventListener('click', () => {
+            console.log('[Validation] Proceed button clicked, disabled:', proceedBtn.disabled);
             if (proceedBtn.disabled) return;
             
             // Show processing state
@@ -1801,9 +1825,11 @@ function showValidationResultScreen(jobData, previewUrl) {
     }
     
     // Handle acknowledgement checkboxes
-    document.querySelectorAll('.validation-ack-checkbox').forEach(checkbox => {
+    checkboxes.forEach(checkbox => {
         checkbox.addEventListener('change', (e) => {
             const issueId = e.target.dataset.issueId;
+            console.log('[Validation] Checkbox changed:', issueId, 'checked:', e.target.checked);
+            
             if (e.target.checked) {
                 if (!acknowledgedIssueIds.includes(issueId)) {
                     acknowledgedIssueIds.push(issueId);
@@ -1813,13 +1839,7 @@ function showValidationResultScreen(jobData, previewUrl) {
             }
             
             // Update button state
-            const allAcked = document.querySelectorAll('.validation-ack-checkbox').length === 
-                            document.querySelectorAll('.validation-ack-checkbox:checked').length;
-            if (proceedBtn) {
-                proceedBtn.disabled = !allAcked;
-                proceedBtn.classList.toggle('opacity-50', !allAcked);
-                proceedBtn.classList.toggle('cursor-not-allowed', !allAcked);
-            }
+            updateProceedButtonState();
         });
     });
     

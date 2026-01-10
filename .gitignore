@@ -10,9 +10,13 @@ __pycache__/
 .Python
 .pytest_cache/
 
-# Uploads & Images
+# Uploads & Outputs (user generated content)
 uploads/
 outputs/
+
+# Static site assets should be tracked!
+# Only ignore images in uploads/outputs folders (already ignored above)
+# Do NOT globally ignore *.png, *.jpg etc - we need static/images/
 
 # IDE
 .vscode/
