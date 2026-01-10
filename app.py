@@ -602,137 +602,145 @@ def process_job(job_id: str, saved_file_path: str):
         print(f"⚠️ [DEV] Keeping job {job_id} in memory fallback")
 
 
-def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supabase: bool):
+def process_job_with_path(job_id: str, path_or_key: str, ext: str):
     """
-    Background task - process job with image bytes (for Supabase Storage).
+    Background task - process job by downloading from storage or reading local file.
     
-    This variant takes image bytes directly instead of a file path,
-    avoiding the need to re-download from storage for analysis.
+    This variant does NOT receive raw bytes (which can break BackgroundTasks).
+    Instead, it downloads/reads the image using the path_or_key.
+    
+    Args:
+        job_id: Job UUID
+        path_or_key: Either Supabase object key (e.g., "originals/xxx.jpg") 
+                     or local file path (e.g., "uploads/xxx.jpg")
+        ext: File extension (e.g., ".jpg")
     """
-    import asyncio
-    import asyncpg
     import json
     import re
     import tempfile
     import traceback
+    import psycopg2
+    from utils.env_config import get_database_url
+    from utils.supabase_storage import download_bytes_sync, is_storage_configured
     
-    print(f"🟢 [BACKGROUND_TASK_START] Job {job_id} - Background task started")
-    print(f"   image_bytes length: {len(image_bytes)}, ext: {ext}, use_supabase: {use_supabase}")
+    print(f"🟢 [BG_START] Job {job_id} - path: {path_or_key}, ext: {ext}")
     
-    # Get preview URL from processing cache
-    current_status = _processing_jobs.get(job_id, {})
-    preview_url = current_status.get("preview_url", None)
+    # Preview URL for this job
+    preview_url = f"/api/preview/{job_id}"
     
-    # Small delay for UI
-    time.sleep(0.5)
-    
-    print(f"🟢 [BACKGROUND_TASK] Job {job_id} - After 0.5s delay, starting processing")
-    
-    # Initialize analyze_result to handle errors
+    # Initialize
     analyze_result = None
-    analysis_error = None
+    db_saved = False
     
-    # Create a temporary file for analysis (analyzers expect file paths)
-    temp_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(image_bytes)
-            temp_path = tmp.name
+        # Step 1: Get image bytes (from storage or local file)
+        is_storage_path = path_or_key.startswith("originals/") or path_or_key.startswith("processed/")
         
-        # Run analysis
-        print(f"🔵 [PIPELINE_START] Job {job_id} - Initial analysis (bytes mode)")
-        
-        if USE_V2_ANALYZER:
-            print(f"🔵 [PIPELINE_BRANCH] V2_ANALYZER selected")
-            analyze_result = analyze_image_v2(job_id, temp_path)
-            analyze_result["analysis_source"] = "V2_ANALYZER"
+        if is_storage_path and is_storage_configured():
+            # Download from Supabase Storage
+            print(f"🟣 [BG_DOWNLOAD] Downloading {path_or_key} from Supabase...")
+            image_bytes, download_error = download_bytes_sync(path_or_key)
+            
+            if download_error or not image_bytes:
+                raise Exception(f"Failed to download from storage: {download_error}")
         else:
-            print(f"🔵 [PIPELINE_BRANCH] V1_ANALYZER selected (legacy)")
-            analyze_result = analyze_image(job_id, temp_path)
-            analyze_result["analysis_source"] = "V1_ANALYZER"
+            # Read from local file
+            print(f"🟣 [BG_READ] Reading from local file: {path_or_key}")
+            if not os.path.exists(path_or_key):
+                raise Exception(f"Local file not found: {path_or_key}")
+            
+            with open(path_or_key, "rb") as f:
+                image_bytes = f.read()
         
-        analyze_result["pipeline_version"] = PIPELINE_VERSION
-        analyze_result["storage_backend"] = "supabase" if use_supabase else "local"
+        print(f"🟣 [BG_DOWNLOADED] Got {len(image_bytes)} bytes")
         
-        issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
-        print(f"🔵 [FINAL_STATUS] Job {job_id} - {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+        # Step 2: Create temp file and run analysis
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(image_bytes)
+                temp_path = tmp.name
+            
+            print(f"🔵 [BG_ANALYZE] Running analyzer on {temp_path}")
+            
+            if USE_V2_ANALYZER:
+                analyze_result = analyze_image_v2(job_id, temp_path)
+                analyze_result["analysis_source"] = "V2_ANALYZER"
+            else:
+                analyze_result = analyze_image(job_id, temp_path)
+                analyze_result["analysis_source"] = "V1_ANALYZER"
+            
+            analyze_result["pipeline_version"] = PIPELINE_VERSION
+            analyze_result["storage_backend"] = "supabase"
+            
+            issue_ids = [i.get("id", "?") for i in analyze_result.get("issues", [])]
+            print(f"🔵 [BG_RESULT] {analyze_result.get('final_status', 'UNKNOWN')} - Issues: {issue_ids}")
+            
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+        
+        # Add preview URL
+        analyze_result["preview_url"] = preview_url
+        analyze_result["preview_image"] = preview_url
         
     except Exception as e:
-        # Catch any analysis errors and create a fallback result
-        analysis_error = str(e)
+        # Create error result
+        error_msg = str(e)
         error_tb = traceback.format_exc()
-        print(f"❌ [ANALYSIS_ERROR] Job {job_id} - Analysis failed: {analysis_error}")
-        print(f"❌ [TRACEBACK] {error_tb}")
+        print(f"🔴 [BG_FAIL] Job {job_id} failed: {error_msg}")
+        print(f"🔴 [BG_TRACEBACK] {error_tb[-500:]}")
         
-        # Create error result so job doesn't stay stuck in "processing"
         analyze_result = {
             "final_status": "FAIL",
             "issues": [{
                 "id": "ANALYSIS_ERROR",
                 "severity": "FAIL",
                 "title_tr": "Analiz hatası",
-                "message_tr": "Fotoğraf analizi sırasında bir hata oluştu. Lütfen farklı bir fotoğraf deneyin.",
+                "message_tr": "Fotoğraf analizi sırasında bir hata oluştu. Lütfen tekrar deneyin.",
                 "requires_ack": False
             }],
             "can_continue": False,
             "server_can_continue": False,
-            "error": analysis_error,
+            "error": error_msg,
             "pipeline_version": PIPELINE_VERSION,
-            "storage_backend": "supabase" if use_supabase else "local"
+            "storage_backend": "supabase",
+            "preview_url": preview_url,
+            "preview_image": preview_url
         }
-        
-    finally:
-        # Clean up temp file
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
     
-    # Preview URL'yi koru (orijinal fotoğraf)
-    if preview_url:
-        analyze_result["preview_url"] = preview_url
-        analyze_result["preview_image"] = preview_url
-        if "overlay" in analyze_result:
-            analyze_result["overlay"]["preview_url"] = preview_url
-    
-    # Compute DB fields
+    # Step 3: Save to DB
     final_status = analyze_result.get("final_status", "UNKNOWN")
     db_status = {
         "PASS": JobStatus.PASS,
         "WARN": JobStatus.WARN,
         "FAIL": JobStatus.FAIL
-    }.get(final_status, JobStatus.ANALYZED)
+    }.get(final_status, JobStatus.FAIL)
     
     requires_ack_ids = [
         issue.get("id") for issue in analyze_result.get("issues", [])
         if issue.get("requires_ack", False)
     ]
-    
     can_continue = analyze_result.get("server_can_continue", analyze_result.get("can_continue", False))
     
-    # Save to DB - use synchronous psycopg2 for background task
-    from utils.env_config import get_database_url
-    import psycopg2
-    
-    db_saved = False
     database_url, _ = get_database_url(required=False)
     
     if database_url:
-        # Convert to psycopg2 format (postgresql://)
         psycopg_url = re.sub(r'^postgres://', 'postgresql://', database_url)
         
-        print(f"🔵 [DB] Attempting to save job {job_id} to database (psycopg2)")
+        print(f"🔵 [BG_DB] Saving job {job_id} to database...")
         
         try:
-            conn = psycopg2.connect(psycopg_url)
+            conn = psycopg2.connect(psycopg_url, connect_timeout=30)
             cur = conn.cursor()
             
             cur.execute("""
                 UPDATE jobs 
                 SET status = %s,
                     analysis_result = %s::jsonb,
-                    normalized_image_path = COALESCE(%s, normalized_image_path),
                     requires_ack_ids = %s::jsonb,
                     acknowledged_issue_ids = '[]'::jsonb,
                     can_continue = %s,
@@ -741,7 +749,6 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
             """, (
                 db_status,
                 json.dumps(analyze_result, default=str),
-                analyze_result.get("normalized_url"),
                 json.dumps(requires_ack_ids),
                 can_continue,
                 job_id
@@ -752,26 +759,17 @@ def process_job_with_bytes(job_id: str, image_bytes: bytes, ext: str, use_supaba
             conn.close()
             
             db_saved = True
-            print(f"✅ [DB] Job {job_id} saved to database")
+            print(f"✅ [BG_DONE] Job {job_id} saved - status: {db_status}")
             
         except Exception as e:
-            print(f"⚠️ [DB] Failed to save job {job_id}: {e}")
-            import traceback as tb
-            print(f"⚠️ [DB] Traceback: {tb.format_exc()[-500:]}")
+            print(f"🔴 [BG_DB_FAIL] Failed to save job {job_id}: {e}")
     else:
-        print(f"⚠️ [DB] No DATABASE_URL configured, cannot save job {job_id}")
+        print(f"🔴 [BG_DB_FAIL] No DATABASE_URL configured")
     
-    # Clear image bytes from processing cache (save memory)
-    if job_id in _processing_jobs:
-        _processing_jobs[job_id].pop("image_bytes", None)
+    # Clear from processing cache
+    _processing_jobs.pop(job_id, None)
     
-    # Clear processing cache - DB is now source of truth
-    if db_saved:
-        _processing_jobs.pop(job_id, None)
-    elif DEV_ALLOW_MEMORY_FALLBACK:
-        # Dev mode: keep in processing cache as fallback
-        _processing_jobs[job_id] = analyze_result
-        print(f"⚠️ [DEV] Keeping job {job_id} in memory fallback")
+    return db_saved
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1238,19 +1236,21 @@ async def upload_file(request: Request, background_tasks: BackgroundTasks, photo
                 "job_id": None
             }, status_code=503)
         
-        # Store in processing cache for the brief analysis window
+        # Store in processing cache for the brief analysis window (no bytes!)
         _processing_jobs[job_id] = {
             "status": "processing",
             "result": None,
             "reasons": [],
-            "preview_url": preview_url,
-            "image_bytes": content,  # Keep bytes for background analysis
-            "use_supabase": use_supabase
+            "preview_url": preview_url
         }
         
         # Background task ile process_job başlat
-        # Pass content bytes for analysis (avoids re-download)
-        background_tasks.add_task(process_job_with_bytes, job_id, content, ext, use_supabase)
+        # Pass only object_key - NOT raw bytes (which breaks BackgroundTasks)
+        if use_supabase:
+            background_tasks.add_task(process_job_with_path, job_id, object_key, ext)
+        else:
+            # Local storage fallback - pass local path
+            background_tasks.add_task(process_job_with_path, job_id, original_image_path, ext)
         
         # Başarılı yükleme - JSON response
         return JSONResponse({
@@ -1738,6 +1738,49 @@ async def test_background_task(background_tasks: BackgroundTasks):
         "test_id": test_id,
         "message": "Background task scheduled - check logs"
     })
+
+
+@app.post("/api/test/process/{job_id}", response_class=JSONResponse)
+async def test_process_sync(job_id: str):
+    """
+    Debug endpoint: Trigger process_job_with_path synchronously.
+    Returns immediately with result or error.
+    """
+    # Get job from DB to find object_key
+    db_job, db_error = await get_job_safe(job_id)
+    
+    if db_error or not db_job:
+        return JSONResponse({
+            "ok": False,
+            "error": f"Job not found: {db_error or 'No such job'}"
+        }, status_code=404)
+    
+    original_path = db_job.get("original_image_path", "")
+    if not original_path:
+        return JSONResponse({
+            "ok": False,
+            "error": "Job has no original_image_path"
+        }, status_code=400)
+    
+    # Determine extension from path
+    ext = os.path.splitext(original_path)[1] or ".jpg"
+    
+    print(f"🧪 [TEST] Running process_job_with_path synchronously for {job_id}")
+    
+    try:
+        result = process_job_with_path(job_id, original_path, ext)
+        return JSONResponse({
+            "ok": True,
+            "db_saved": result,
+            "message": "Processing completed synchronously"
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()[-500:]
+        }, status_code=500)
 
 
 @app.get("/api/test/psycopg2", response_class=JSONResponse)
