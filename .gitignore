@@ -13,10 +13,6 @@ __pycache__/
 # Uploads & Images
 uploads/
 outputs/
-*.jpg
-*.jpeg
-*.png
-*.webp
 
 # IDE
 .vscode/
