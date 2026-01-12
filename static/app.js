@@ -1556,25 +1556,42 @@ function startProcessingPolling(jobId) {
 
 // Payment state
 let isPaid = false;
-let stripeConfig = null;
+let paymentConfig = null;  // PayTR config (primary)
+let stripeConfig = null;   // Stripe config (legacy, kept for compatibility)
 
-// Load Stripe config on page load
+// Load PayTR config on page load (primary payment provider)
+async function loadPaymentConfig() {
+    try {
+        const response = await fetch('/api/config/paytr');
+        paymentConfig = await response.json();
+        console.log('[PAYTR] Config loaded:', paymentConfig);
+        console.log('[PAYTR] Payments enabled:', paymentConfig?.enabled);
+    } catch (error) {
+        console.error('[PAYTR] Failed to load config:', error);
+        // Default to disabled when config fails to load
+        paymentConfig = { enabled: false, prices: {} };
+    }
+}
+
+// Legacy: Load Stripe config (kept for compatibility)
 async function loadStripeConfig() {
+    // Load PayTR config instead (primary)
+    await loadPaymentConfig();
+    
+    // Also load Stripe config for fallback
     try {
         const response = await fetch('/api/config/stripe');
         stripeConfig = await response.json();
-        console.log('[STRIPE] Config loaded:', stripeConfig);
-        console.log('[STRIPE] Payments enabled:', stripeConfig?.enabled);
+        console.log('[STRIPE] Config loaded (legacy):', stripeConfig);
     } catch (error) {
         console.error('[STRIPE] Failed to load config:', error);
-        // Default to disabled when config fails to load
         stripeConfig = { enabled: false, prices: {} };
     }
 }
 
-// Check if payments are enabled
+// Check if payments are enabled (PayTR primary, Stripe fallback)
 function isPaymentsEnabled() {
-    return stripeConfig?.enabled === true;
+    return paymentConfig?.enabled === true || stripeConfig?.enabled === true;
 }
 
 // Check payment status for a job
@@ -1590,46 +1607,76 @@ async function checkPaymentStatus(jobId) {
     }
 }
 
-// Initiate Stripe Checkout
+// Initiate PayTR Checkout (primary payment method)
 async function initiateCheckout(jobId, packageType, shippingData = null) {
-    console.log('[CHECKOUT] Initiating for:', jobId, packageType, shippingData ? 'with shipping' : 'digital only');
+    console.log('[CHECKOUT] Initiating PayTR for:', jobId, packageType, shippingData ? 'with shipping' : 'digital only');
     
     try {
-        const payload = { 
-            job_id: jobId, 
-            package_type: packageType 
+        // Build customer data
+        const customer = {
+            email: customerEmail || shippingData?.email || 'customer@example.com',
+            full_name: shippingData ? `${shippingData.firstname || ''} ${shippingData.lastname || ''}`.trim() : 'Müşteri',
+            phone: shippingData?.phone || '5000000000',
+            address: shippingData?.address || 'Türkiye',
+            city: shippingData?.city || 'İstanbul',
+            postal_code: shippingData?.postalcode || '34000'
         };
         
-        // Add shipping data for digital_print orders
-        if (packageType === 'digital_print' && shippingData) {
-            payload.shipping = {
-                first_name: shippingData.firstname,
-                last_name: shippingData.lastname,
-                address: shippingData.address,
-                city: shippingData.city,
-                postal_code: shippingData.postalcode,
-                phone: shippingData.phone,
-                email: shippingData.email
-            };
-        }
+        const payload = { 
+            job_id: jobId, 
+            product_type: packageType,
+            customer: customer,
+            ack_ids: acknowledgedIssueIds || []
+        };
         
-        const response = await fetch('/api/checkout', {
+        console.log('[PAYTR] Init payload:', payload);
+        
+        const response = await fetch('/api/paytr/init', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         
         const data = await response.json();
+        console.log('[PAYTR] Init response:', data);
         
         if (data.success && data.checkout_url) {
-            // Redirect to Stripe Checkout
+            // Redirect to PayTR checkout page
             window.location.href = data.checkout_url;
         } else {
+            // Re-enable buttons on error
+            resetPayButtons();
             alert(data.error || 'Ödeme başlatılamadı');
         }
     } catch (error) {
         console.error('[CHECKOUT] Error:', error);
+        resetPayButtons();
         alert('Bir hata oluştu. Lütfen tekrar deneyin.');
+    }
+}
+
+// Reset pay buttons after error
+function resetPayButtons() {
+    const payNowBtn = document.getElementById('payNowBtn');
+    const mobilePayBtn = document.getElementById('mobilePayBtn');
+    
+    if (payNowBtn) {
+        payNowBtn.disabled = false;
+        payNowBtn.innerHTML = `
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+            </svg>
+            Şimdi ödeyin
+        `;
+    }
+    if (mobilePayBtn) {
+        mobilePayBtn.disabled = false;
+        mobilePayBtn.innerHTML = `
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+            </svg>
+            Şimdi ödeyin
+        `;
     }
 }
 
@@ -2289,10 +2336,10 @@ function showProcessedResult(jobId, outputUrl) {
     // (disabled payments = button disabled + "bakım" note)
     const paymentsActive = isPaymentsEnabled();
     
-    // Get prices from Stripe config
-    const prices = stripeConfig?.prices || {
+    // Get prices from PayTR config (primary) or Stripe config (fallback)
+    const prices = paymentConfig?.prices || stripeConfig?.prices || {
         digital: { display: '₺100', amount_tl: 100, name: 'Dijital', description: 'Anında indir' },
-        digital_print: { display: '₺200', amount_tl: 200, name: 'Dijital + Baskı', description: 'Baskı + kargo' }
+        digital_print: { display: '₺400', amount_tl: 400, name: 'Dijital + Baskı', description: '4 adet baskı + kargo' }
     };
     
     // Build premium checkout page
@@ -2679,11 +2726,11 @@ function showProcessedResult(jobId, outputUrl) {
                         <span class="text-xs text-slate-600 font-medium">ICAO Uyumlu*</span>
                     </div>
                     <div class="bg-white rounded-xl p-3 border border-slate-100 flex items-center gap-2">
-                        <svg class="w-5 h-5" viewBox="0 0 32 32" fill="none">
-                            <rect width="32" height="32" rx="6" fill="#635BFF"/>
-                            <path d="M15.5 10.5h-3v8h2v-3h1c1.7 0 3-1.3 3-2.5s-1.3-2.5-3-2.5zm0 3.5h-1v-2h1c.6 0 1 .4 1 1s-.4 1-1 1zm6.5-3.5h-2v8h2v-8z" fill="white"/>
+                        <svg class="w-5 h-5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"></path>
+                            <path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd"></path>
                         </svg>
-                        <span class="text-xs text-slate-600 font-medium">Stripe ile ödeme</span>
+                        <span class="text-xs text-slate-600 font-medium">PayTR Güvenli Ödeme</span>
                     </div>
                 </div>
                 

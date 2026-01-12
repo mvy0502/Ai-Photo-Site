@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ödeme - BiyometrikFoto.tr</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://www.paytr.com/js/iframeResizer.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .loading-spinner {
+            border: 3px solid #e2e8f0;
+            border-top: 3px solid #10b981;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+    <!-- Header -->
+    <header class="bg-slate-900 text-white px-6 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <a href="/" class="flex items-center gap-3 hover:opacity-80 transition-opacity">
+                <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                </div>
+                <span class="font-semibold text-sm">BiyometrikFoto.tr</span>
+            </a>
+        </div>
+        <div class="flex items-center gap-2 text-xs text-slate-300">
+            <svg class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+            </svg>
+            <span>Güvenli Ödeme</span>
+        </div>
+    </header>
+    
+    <main class="max-w-4xl mx-auto px-4 py-8">
+        <!-- Order Summary Card -->
+        <div class="bg-white rounded-2xl shadow-lg overflow-hidden mb-6">
+            <div class="bg-gradient-to-r from-emerald-500 to-emerald-600 px-6 py-4">
+                <h1 class="text-xl font-bold text-white">Sipariş Özeti</h1>
+            </div>
+            
+            <div class="p-6">
+                <div class="flex items-center justify-between pb-4 border-b border-slate-100">
+                    <div class="flex items-center gap-4">
+                        <div class="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center">
+                            <svg class="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900">{{ product_name }}</h3>
+                            <p class="text-sm text-slate-500">Türkiye Biyometrik Fotoğraf</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-2xl font-bold text-emerald-600">{{ amount_display }}</span>
+                    </div>
+                </div>
+                
+                <div class="pt-4 flex items-center justify-between text-sm text-slate-500">
+                    <span>Sipariş No: {{ merchant_oid[:16] }}...</span>
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span>ICAO Uyumlu</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Payment Form Card -->
+        <div class="bg-white rounded-2xl shadow-lg overflow-hidden">
+            <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <h2 class="text-lg font-bold text-slate-900">Ödeme Bilgileri</h2>
+                <div class="flex items-center gap-2">
+                    <img src="https://www.paytr.com/img/visa.svg" alt="Visa" class="h-6">
+                    <img src="https://www.paytr.com/img/mastercard.svg" alt="Mastercard" class="h-6">
+                </div>
+            </div>
+            
+            <!-- Loading State -->
+            <div id="loadingState" class="p-12 text-center">
+                <div class="loading-spinner mx-auto mb-4"></div>
+                <p class="text-slate-600">Ödeme formu yükleniyor...</p>
+            </div>
+            
+            <!-- PayTR iFrame Container -->
+            <div id="iframeContainer" class="hidden">
+                <iframe 
+                    src="https://www.paytr.com/odeme/guvenli/{{ token }}" 
+                    id="paytriframe" 
+                    frameborder="0" 
+                    scrolling="no" 
+                    style="width: 100%; min-height: 400px;"
+                ></iframe>
+            </div>
+            
+            <!-- Error State -->
+            <div id="errorState" class="hidden p-12 text-center">
+                <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg class="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-lg font-bold text-slate-800 mb-2">Ödeme formu yüklenemedi</h3>
+                <p class="text-slate-500 mb-4">Lütfen sayfayı yenileyin veya daha sonra tekrar deneyin.</p>
+                <button onclick="location.reload()" class="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-xl transition-colors">
+                    Tekrar Dene
+                </button>
+            </div>
+        </div>
+        
+        <!-- Trust Badges -->
+        <div class="mt-6 flex flex-wrap items-center justify-center gap-6 text-sm text-slate-500">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                <span>256-bit SSL</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"></path>
+                    <path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd"></path>
+                </svg>
+                <span>3D Secure</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                <span>PayTR Güvencesi</span>
+            </div>
+        </div>
+        
+        <!-- Back Link -->
+        <div class="mt-8 text-center">
+            <a href="/" class="text-slate-400 hover:text-slate-600 text-sm flex items-center justify-center gap-1 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                </svg>
+                Alışverişe geri dön
+            </a>
+        </div>
+    </main>
+    
+    <script>
+        // Initialize PayTR iframe resizer
+        document.addEventListener('DOMContentLoaded', function() {
+            const iframe = document.getElementById('paytriframe');
+            const loadingState = document.getElementById('loadingState');
+            const iframeContainer = document.getElementById('iframeContainer');
+            const errorState = document.getElementById('errorState');
+            
+            // Set timeout for loading
+            const loadTimeout = setTimeout(function() {
+                // If still loading after 10 seconds, show error
+                if (!iframeContainer.classList.contains('hidden') === false) {
+                    loadingState.classList.add('hidden');
+                    errorState.classList.remove('hidden');
+                }
+            }, 10000);
+            
+            // When iframe loads
+            iframe.onload = function() {
+                clearTimeout(loadTimeout);
+                loadingState.classList.add('hidden');
+                iframeContainer.classList.remove('hidden');
+                
+                // Initialize iFrame resizer
+                try {
+                    iFrameResize({}, '#paytriframe');
+                } catch (e) {
+                    console.error('iFrameResize error:', e);
+                }
+            };
+            
+            // Handle iframe error
+            iframe.onerror = function() {
+                clearTimeout(loadTimeout);
+                loadingState.classList.add('hidden');
+                errorState.classList.remove('hidden');
+            };
+        });
+    </script>
+</body>
+</html>

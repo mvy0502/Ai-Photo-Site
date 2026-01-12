@@ -52,6 +52,15 @@ from utils.job_queue import get_job_queue, init_job_queue, JobState
 from utils.rate_limiter import get_rate_limiter, get_status_cache
 from utils.db_pool import get_db_pool, close_db_pool
 
+# PayTR Payment Integration
+from utils.paytr import (
+    is_paytr_configured, get_paytr_config, create_iframe_token,
+    verify_webhook_hash, parse_merchant_oid, get_client_ip,
+    get_price_display as get_paytr_price_display, get_iframe_url,
+    DIGITAL_PRICE_KURUS as PAYTR_DIGITAL_PRICE,
+    PRINT_PRICE_KURUS as PAYTR_PRINT_PRICE
+)
+
 # Feature flag for V2 analyzer
 USE_V2_ANALYZER = True
 PIPELINE_VERSION = "2.1.0-photoroom"
@@ -1782,15 +1791,43 @@ async def get_payment_status(job_id: str):
     """
     Get payment status for a job.
     
-    If payments are disabled:
+    Checks both PayTR (DB) and Stripe (in-memory) payment status.
+    
+    If no payment system is configured:
     - Returns enabled=false
     - can_download=true (free download during beta)
     """
-    # Check if payments are enabled
-    payments_enabled = is_payments_enabled()
+    # Check if any payment system is enabled
+    paytr_enabled = is_paytr_configured()
+    stripe_enabled = is_payments_enabled()
+    any_payments_enabled = paytr_enabled or stripe_enabled
     
-    if not payments_enabled:
-        # Payments disabled - allow free download
+    # Get job from DB to check PayTR payment state
+    db_job, db_error = await get_job_safe(job_id)
+    
+    if db_error:
+        return JSONResponse({
+            "error": "Veritabanı hatası"
+        }, status_code=503)
+    
+    if not db_job:
+        return JSONResponse({
+            "error": "İş bulunamadı"
+        }, status_code=404)
+    
+    # Check PayTR payment state from DB
+    db_payment_state = db_job.get("payment_state", "")
+    db_paid = db_payment_state == "PAID"
+    
+    # Check Stripe in-memory order (legacy)
+    stripe_order = get_order(job_id)
+    stripe_paid = is_paid(job_id) if stripe_enabled else False
+    
+    # Combined paid status
+    paid = db_paid or stripe_paid
+    
+    # If no payment system is configured, allow free download
+    if not any_payments_enabled:
         return JSONResponse({
             "enabled": False,
             "paid": True,  # Treat as paid when payments disabled
@@ -1800,30 +1837,23 @@ async def get_payment_status(job_id: str):
             "message": "Beta döneminde indirme ücretsiz"
         })
     
-    order = get_order(job_id)
-    
-    if not order:
-        # Check if job exists in DB
-        db_job, _ = await get_job_safe(job_id)
-        if db_job:
-            # Job exists but no payment attempted
-            return JSONResponse({
-                "enabled": True,
-                "paid": False,
-                "state": "ANALYZED",
-                "can_download": False,
-            })
-        return JSONResponse({
-            "error": "İş bulunamadı"
-        }, status_code=404)
-    
-    paid = is_paid(job_id)
+    # Determine state
+    if paid:
+        state = "PAID"
+    elif db_payment_state == "PAYMENT_PENDING":
+        state = "PAYMENT_PENDING"
+    elif db_payment_state == "FAILED":
+        state = "FAILED"
+    elif stripe_order:
+        state = stripe_order.get("state", "ANALYZED")
+    else:
+        state = "ANALYZED"
     
     return JSONResponse({
         "enabled": True,
         "paid": paid,
-        "state": order.get("state"),
-        "package_type": order.get("package_type"),
+        "state": state,
+        "payment_provider": "paytr" if db_paid else ("stripe" if stripe_paid else None),
         "can_download": paid,
         "download_url": generate_signed_url(job_id) if paid else None,
     })
@@ -1840,15 +1870,40 @@ async def secure_download(job_id: str, expires: int = None, sig: str = None):
     
     If using Supabase Storage, redirects to a signed URL.
     If using local storage, serves the file directly.
+    
+    Payment verification:
+    - Checks job.payment_state in DB (for PayTR)
+    - Falls back to Stripe in-memory order store
+    - DEV_ALLOW_FREE_DOWNLOADS env var can bypass payment check
     """
+    # Check DEV_ALLOW_FREE_DOWNLOADS flag
+    dev_free_downloads = os.getenv("DEV_ALLOW_FREE_DOWNLOADS", "").lower() == "true"
+    
     # If signed URL parameters provided, verify them
     if expires is not None and sig is not None:
         if not verify_signed_url(job_id, expires, sig):
             raise HTTPException(status_code=403, detail="Geçersiz veya süresi dolmuş link")
-    else:
-        # No signed URL - verify payment status (skip if payments disabled)
-        if is_payments_enabled() and not is_paid(job_id):
-            raise HTTPException(status_code=403, detail="İndirme için ödeme gerekli")
+    elif not dev_free_downloads:
+        # No signed URL - verify payment status
+        # First check DB for PayTR payment state
+        db_job, _ = await get_job_safe(job_id)
+        db_paid = db_job and db_job.get("payment_state") == "PAID" if db_job else False
+        
+        # Also check Stripe in-memory store (legacy)
+        stripe_paid = is_paid(job_id) if is_payments_enabled() else False
+        
+        # Check PayTR configured
+        paytr_configured = is_paytr_configured()
+        stripe_configured = is_payments_enabled()
+        
+        # If neither payment system is configured, allow download (beta mode)
+        if not paytr_configured and not stripe_configured:
+            print(f"[DOWNLOAD] job_id={job_id} - No payment system configured, allowing download")
+        elif not db_paid and not stripe_paid:
+            print(f"[DOWNLOAD] job_id={job_id} paid=false - blocking download")
+            raise HTTPException(status_code=402, detail="İndirme için ödeme gerekli")
+        else:
+            print(f"[DOWNLOAD] job_id={job_id} paid=true")
     
     # Get job from DB to check storage backend
     db_job, db_error = await get_job_safe(job_id)
@@ -2302,4 +2357,425 @@ async def get_stripe_config():
             "digital": config["digital_price"],
             "digital_print": config["print_price"],
         }
+    })
+
+
+# ============================================================================
+# PayTR Payment Endpoints
+# ============================================================================
+
+class PayTRCustomer(BaseModel):
+    email: str
+    full_name: Optional[str] = "Müşteri"
+    phone: Optional[str] = "5000000000"
+    address: Optional[str] = "Türkiye"
+    city: Optional[str] = "İstanbul"
+    district: Optional[str] = ""
+    postal_code: Optional[str] = "34000"
+
+
+class PayTRInitRequest(BaseModel):
+    job_id: str
+    product_type: str  # "digital" or "digital_print"
+    customer: PayTRCustomer
+    ack_ids: Optional[List[str]] = []
+
+
+@app.get("/api/config/paytr", response_class=JSONResponse)
+async def get_paytr_config_endpoint():
+    """
+    Get PayTR payment configuration for frontend.
+    Returns enabled status and prices.
+    """
+    config = get_paytr_config()
+    return JSONResponse(config)
+
+
+@app.post("/api/paytr/init", response_class=JSONResponse)
+async def paytr_init(request: Request, init_req: PayTRInitRequest):
+    """
+    Initialize PayTR payment session.
+    
+    Creates iframe token and payment record in database.
+    
+    Request JSON:
+    {
+        "job_id": "uuid",
+        "product_type": "digital" | "digital_print",
+        "customer": {
+            "email": "user@example.com",
+            "full_name": "Ad Soyad",
+            "phone": "5XXXXXXXXX",
+            "address": "Adres",
+            "city": "Şehir",
+            "postal_code": "34000"
+        },
+        "ack_ids": ["GLASSES_DETECTED"]  // optional, for acknowledged warnings
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "token": "paytr_iframe_token",
+        "merchant_oid": "job_xxx_timestamp",
+        "amount_kurus": 10000,
+        "checkout_url": "/payment/paytr?token=xxx"
+    }
+    """
+    job_id = init_req.job_id
+    product_type = init_req.product_type
+    customer = init_req.customer
+    ack_ids = init_req.ack_ids or []
+    
+    # Validate PayTR is configured
+    if not is_paytr_configured():
+        return JSONResponse({
+            "success": False,
+            "error": "Ödeme sistemi yapılandırılmamış",
+            "code": "PAYTR_NOT_CONFIGURED"
+        }, status_code=501)
+    
+    # Validate product type
+    if product_type not in ["digital", "digital_print"]:
+        return JSONResponse({
+            "success": False,
+            "error": "Geçersiz ürün tipi"
+        }, status_code=400)
+    
+    # DB-first job validation
+    db_job, error = await get_job_safe(job_id)
+    
+    if error:
+        return JSONResponse({
+            "success": False,
+            "error": "Veritabanı hatası"
+        }, status_code=503)
+    
+    if not db_job:
+        return JSONResponse({
+            "success": False,
+            "error": "İş bulunamadı"
+        }, status_code=404)
+    
+    # Check can_continue
+    can_continue = db_job.get("can_continue", False)
+    requires_ack_ids = db_job.get("requires_ack_ids", [])
+    
+    # If requires acknowledgement, check if provided
+    if requires_ack_ids and not can_continue:
+        # Check if all required acks are provided
+        missing_acks = [ack for ack in requires_ack_ids if ack not in ack_ids]
+        if missing_acks:
+            return JSONResponse({
+                "success": False,
+                "error": f"Uyarılar onaylanmalı: {', '.join(missing_acks)}",
+                "code": "ACK_REQUIRED",
+                "missing_acks": missing_acks
+            }, status_code=400)
+    
+    # Get client IP
+    user_ip = get_client_ip(request)
+    
+    # Build URLs
+    base_url = str(request.base_url).rstrip("/")
+    merchant_ok_url = f"{base_url}/payment/success"
+    merchant_fail_url = f"{base_url}/payment/cancel"
+    
+    # Create iframe token
+    token, merchant_oid, paytr_error = create_iframe_token(
+        job_id=job_id,
+        product_type=product_type,
+        user_email=customer.email,
+        user_ip=user_ip,
+        user_name=customer.full_name or "Müşteri",
+        user_address=customer.address or "Türkiye",
+        user_phone=customer.phone or "5000000000",
+        merchant_ok_url=merchant_ok_url,
+        merchant_fail_url=merchant_fail_url
+    )
+    
+    if paytr_error:
+        print(f"[PAYTR_INIT] Error: {paytr_error}")
+        return JSONResponse({
+            "success": False,
+            "error": f"Ödeme başlatılamadı: {paytr_error}",
+            "code": "PAYTR_ERROR"
+        }, status_code=500)
+    
+    # Determine amount
+    amount_kurus = PAYTR_DIGITAL_PRICE if product_type == "digital" else PAYTR_PRINT_PRICE
+    
+    # Update job with payment info
+    try:
+        import json
+        import asyncpg
+        import re
+        
+        database_url = os.getenv("DATABASE_URL", "")
+        if database_url:
+            asyncpg_url = re.sub(r'^postgres(ql)?://', 'postgresql://', database_url)
+            
+            conn = await asyncpg.connect(asyncpg_url)
+            try:
+                # Upsert payment record
+                await conn.execute("""
+                    INSERT INTO payments (id, job_id, provider, status, amount_kurus, currency, provider_ref, product_type, created_at, updated_at)
+                    VALUES (gen_random_uuid(), $1::uuid, 'paytr', 'INIT', $2, 'TRY', $3, $4, NOW(), NOW())
+                    ON CONFLICT (job_id, provider) DO UPDATE SET
+                        status = 'INIT',
+                        amount_kurus = $2,
+                        provider_ref = $3,
+                        product_type = $4,
+                        updated_at = NOW()
+                """, job_id, amount_kurus, merchant_oid, product_type)
+                
+                # Update job payment state and email
+                await conn.execute("""
+                    UPDATE jobs 
+                    SET payment_state = 'PAYMENT_PENDING',
+                        user_email = $2,
+                        updated_at = NOW()
+                    WHERE id = $1::uuid
+                """, job_id, customer.email)
+                
+                # If digital_print, create/update print_orders
+                if product_type == "digital_print":
+                    await conn.execute("""
+                        INSERT INTO print_orders (id, job_id, full_name, phone, email, address, city, district, postal_code, status, created_at, updated_at)
+                        VALUES (gen_random_uuid(), $1::uuid, $2, $3, $4, $5, $6, $7, $8, 'CREATED', NOW(), NOW())
+                        ON CONFLICT (job_id) DO UPDATE SET
+                            full_name = $2,
+                            phone = $3,
+                            email = $4,
+                            address = $5,
+                            city = $6,
+                            district = $7,
+                            postal_code = $8,
+                            status = 'CREATED',
+                            updated_at = NOW()
+                    """, job_id, customer.full_name, customer.phone, customer.email,
+                        customer.address, customer.city, customer.district or "", customer.postal_code)
+                
+                print(f"[PAYTR_INIT] DB updated for job {job_id}")
+            finally:
+                await conn.close()
+    except Exception as e:
+        print(f"[PAYTR_INIT] DB error (non-fatal): {e}")
+        # Continue anyway - payment can still work
+    
+    print(f"[PAYTR_INIT] Success - job_id={job_id}, merchant_oid={merchant_oid}, amount={amount_kurus}")
+    
+    return JSONResponse({
+        "success": True,
+        "token": token,
+        "merchant_oid": merchant_oid,
+        "amount_kurus": amount_kurus,
+        "checkout_url": f"/payment/paytr?token={token}&merchant_oid={merchant_oid}&product_type={product_type}"
+    })
+
+
+@app.get("/payment/paytr", response_class=HTMLResponse)
+async def paytr_checkout_page(request: Request, token: str, merchant_oid: str = "", product_type: str = "digital"):
+    """
+    Render PayTR checkout page with embedded iframe.
+    """
+    if not token:
+        return templates.TemplateResponse("payment_cancel.html", {
+            "request": request,
+            "job_id": None,
+            "error": "Geçersiz ödeme tokeni"
+        })
+    
+    # Determine product name and amount for display
+    if product_type == "digital_print":
+        product_name = "Dijital + Baskı (4 adet)"
+        amount_kurus = PAYTR_PRINT_PRICE
+    else:
+        product_name = "Dijital Fotoğraf"
+        amount_kurus = PAYTR_DIGITAL_PRICE
+    
+    amount_display = f"₺{amount_kurus / 100:.0f}"
+    
+    return templates.TemplateResponse("paytr_checkout.html", {
+        "request": request,
+        "token": token,
+        "merchant_oid": merchant_oid,
+        "product_name": product_name,
+        "amount_display": amount_display,
+        "product_type": product_type
+    })
+
+
+@app.post("/api/paytr/webhook")
+async def paytr_webhook(request: Request):
+    """
+    Handle PayTR webhook notifications.
+    
+    PayTR sends POST with form data:
+    - merchant_oid: Order ID
+    - status: "success" or "failed"
+    - total_amount: Amount in kuruş
+    - hash: Verification hash
+    - failed_reason_code: Error code (if failed)
+    - failed_reason_msg: Error message (if failed)
+    - test_mode: "1" if test transaction
+    - payment_type: "card" or "eft"
+    - currency: "TL", "USD", etc.
+    - payment_amount: Original amount
+    
+    Must respond with "OK" text.
+    """
+    try:
+        form_data = await request.form()
+        
+        merchant_oid = form_data.get("merchant_oid", "")
+        status = form_data.get("status", "")
+        total_amount = form_data.get("total_amount", "")
+        received_hash = form_data.get("hash", "")
+        failed_reason_code = form_data.get("failed_reason_code", "")
+        failed_reason_msg = form_data.get("failed_reason_msg", "")
+        test_mode = form_data.get("test_mode", "0")
+        payment_type = form_data.get("payment_type", "card")
+        
+        print(f"[PAYTR_WEBHOOK] merchant_oid={merchant_oid}, status={status}, amount={total_amount}")
+        
+        # Verify hash
+        if not verify_webhook_hash(merchant_oid, status, total_amount, received_hash):
+            print(f"[PAYTR_WEBHOOK] Invalid hash for {merchant_oid}")
+            return HTMLResponse("INVALID_HASH", status_code=400)
+        
+        # Parse job_id from merchant_oid
+        job_id = parse_merchant_oid(merchant_oid)
+        if not job_id:
+            print(f"[PAYTR_WEBHOOK] Invalid merchant_oid format: {merchant_oid}")
+            # Still return OK to prevent retries
+            return HTMLResponse("OK")
+        
+        # Check idempotency - if already processed, just return OK
+        try:
+            import asyncpg
+            import re
+            
+            database_url = os.getenv("DATABASE_URL", "")
+            if database_url:
+                asyncpg_url = re.sub(r'^postgres(ql)?://', 'postgresql://', database_url)
+                
+                conn = await asyncpg.connect(asyncpg_url)
+                try:
+                    # Check if already processed
+                    existing = await conn.fetchrow("""
+                        SELECT webhook_processed_at FROM payments 
+                        WHERE provider_ref = $1 AND provider = 'paytr'
+                    """, merchant_oid)
+                    
+                    if existing and existing['webhook_processed_at']:
+                        print(f"[PAYTR_WEBHOOK] Already processed: {merchant_oid}")
+                        return HTMLResponse("OK")
+                    
+                    if status == "success":
+                        # Update payment status
+                        await conn.execute("""
+                            UPDATE payments 
+                            SET status = 'PAID',
+                                webhook_processed_at = NOW(),
+                                updated_at = NOW()
+                            WHERE provider_ref = $1 AND provider = 'paytr'
+                        """, merchant_oid)
+                        
+                        # Update job payment state
+                        await conn.execute("""
+                            UPDATE jobs 
+                            SET payment_state = 'PAID',
+                                updated_at = NOW()
+                            WHERE id = $1::uuid
+                        """, job_id)
+                        
+                        # If print order, update status
+                        await conn.execute("""
+                            UPDATE print_orders 
+                            SET status = 'PAID',
+                                updated_at = NOW()
+                            WHERE job_id = $1::uuid
+                        """, job_id)
+                        
+                        print(f"[PAYTR_WEBHOOK] Payment SUCCESS for job {job_id}")
+                    else:
+                        # Payment failed
+                        await conn.execute("""
+                            UPDATE payments 
+                            SET status = 'FAILED',
+                                webhook_processed_at = NOW(),
+                                updated_at = NOW()
+                            WHERE provider_ref = $1 AND provider = 'paytr'
+                        """, merchant_oid)
+                        
+                        # Update job payment state
+                        await conn.execute("""
+                            UPDATE jobs 
+                            SET payment_state = 'FAILED',
+                                updated_at = NOW()
+                            WHERE id = $1::uuid
+                        """, job_id)
+                        
+                        print(f"[PAYTR_WEBHOOK] Payment FAILED for job {job_id}: {failed_reason_code} - {failed_reason_msg}")
+                    
+                finally:
+                    await conn.close()
+        except Exception as e:
+            print(f"[PAYTR_WEBHOOK] DB error: {e}")
+            # Still return OK - PayTR will retry otherwise
+        
+        # Must return "OK" as plain text
+        return HTMLResponse("OK")
+        
+    except Exception as e:
+        print(f"[PAYTR_WEBHOOK] Exception: {e}")
+        return HTMLResponse("OK")  # Return OK to prevent infinite retries
+
+
+@app.get("/payment/success", response_class=HTMLResponse)
+async def payment_success_page(request: Request, merchant_oid: str = None, session_id: str = None):
+    """
+    Handle successful payment redirect.
+    
+    Supports both PayTR (merchant_oid) and Stripe (session_id) parameters.
+    """
+    job_id = None
+    
+    # Try PayTR first
+    if merchant_oid:
+        job_id = parse_merchant_oid(merchant_oid)
+        print(f"[PAYTR_SUCCESS_PAGE] merchant_oid={merchant_oid}, job_id={job_id}")
+    
+    # Fallback to Stripe
+    if not job_id and session_id:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            job_id = session.metadata.get("job_id")
+        except:
+            pass
+    
+    return templates.TemplateResponse("payment_success.html", {
+        "request": request,
+        "session_id": session_id or "",
+        "job_id": job_id or "",
+        "merchant_oid": merchant_oid or ""
+    })
+
+
+@app.get("/payment/cancel", response_class=HTMLResponse)
+async def payment_cancel_page(request: Request, job_id: str = None, merchant_oid: str = None):
+    """
+    Handle cancelled/failed payment redirect.
+    
+    Supports both PayTR and Stripe parameters.
+    """
+    # Try to get job_id from merchant_oid if not provided
+    if not job_id and merchant_oid:
+        job_id = parse_merchant_oid(merchant_oid)
+    
+    return templates.TemplateResponse("payment_cancel.html", {
+        "request": request,
+        "job_id": job_id,
+        "merchant_oid": merchant_oid or ""
     })

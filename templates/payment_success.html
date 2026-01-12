@@ -190,6 +190,7 @@
     <script>
         const sessionId = "{{ session_id }}";
         const jobId = "{{ job_id }}";
+        const merchantOid = "{{ merchant_oid }}";
         
         const loadingState = document.getElementById('loadingState');
         const successState = document.getElementById('successState');
@@ -200,7 +201,17 @@
         const emailStatus = document.getElementById('emailStatus');
         
         async function checkPaymentStatus() {
-            if (!jobId) {
+            // Try to get job_id from merchant_oid if not provided
+            let effectiveJobId = jobId;
+            if (!effectiveJobId && merchantOid) {
+                // Parse job_id from merchant_oid (format: job_<uuid>_<timestamp>)
+                const parts = merchantOid.split('_');
+                if (parts.length >= 3 && parts[0] === 'job') {
+                    effectiveJobId = parts.slice(1, -1).join('_');
+                }
+            }
+            
+            if (!effectiveJobId) {
                 showError('İş bulunamadı');
                 return;
             }
@@ -211,14 +222,14 @@
                 const maxAttempts = 12;
                 
                 while (attempts < maxAttempts) {
-                    const response = await fetch(`/api/payment/status/${jobId}`);
+                    const response = await fetch(`/api/payment/status/${effectiveJobId}`);
                     const data = await response.json();
                     
-                    if (data.paid) {
-                        showSuccess(data.download_url);
+                    if (data.paid || data.can_download) {
+                        showSuccess(data.download_url || `/api/download/${effectiveJobId}`);
                         // Auto-trigger download
                         setTimeout(() => {
-                            window.location.href = data.download_url;
+                            window.location.href = data.download_url || `/api/download/${effectiveJobId}`;
                         }, 1000);
                         return;
                     }
