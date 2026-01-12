@@ -14,30 +14,18 @@
         body { font-family: 'Inter', sans-serif; }
         
         /* Guaranteed spinner animation (works without Tailwind JIT) */
-        .spin {
-            animation: spin 0.9s linear infinite;
-        }
-        @keyframes spin {
+        @keyframes spin360 {
             to { transform: rotate(360deg); }
         }
+        .spinner-rotate {
+            animation: spin360 1s linear infinite;
+        }
         
-        /* Material-like SVG spinner */
-        .spinner-svg {
-            width: 24px;
-            height: 24px;
-        }
-        .spinner-circle {
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 3;
-            stroke-linecap: round;
-            transform-origin: 50% 50%;
-            animation: spin 1.2s linear infinite, dash 1.5s ease-in-out infinite;
-        }
-        @keyframes dash {
-            0%   { stroke-dasharray: 1, 200;   stroke-dashoffset: 0; }
-            50%  { stroke-dasharray: 90, 200;  stroke-dashoffset: -35; }
-            100% { stroke-dasharray: 1, 200;   stroke-dashoffset: -125; }
+        /* Remove list bullets for spinner rows */
+        .no-marker {
+            list-style: none !important;
+            padding-left: 0 !important;
+            margin-left: 0 !important;
         }
     </style>
 </head>

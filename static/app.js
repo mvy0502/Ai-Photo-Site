@@ -479,8 +479,8 @@ function showFinalCheckSpinner() {
     spinnerDiv.className = 'flex items-center gap-4 mt-4 pt-4 border-t border-slate-100';
     spinnerDiv.innerHTML = `
         <div class="flex-shrink-0">
-            <svg class="spinner-svg text-blue-600" viewBox="0 0 50 50" role="status" aria-label="Yükleniyor">
-                <circle class="spinner-circle" cx="25" cy="25" r="20"></circle>
+            <svg class="spinner-rotate text-blue-600" width="24" height="24" viewBox="0 0 50 50" role="status" aria-label="Yükleniyor">
+                <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="90 200" stroke-dashoffset="0"></circle>
             </svg>
         </div>
         <div class="flex-1">
