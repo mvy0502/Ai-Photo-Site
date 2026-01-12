@@ -1872,8 +1872,10 @@ async function startStep2ProcessingWithBlur(jobId, acknowledgedIds, originalPrev
     scanMinDone = false;
     jobDone = false;
     
-    // Close validation result modal
-    closeResultModal();
+    // Close validation result modal (directly, not via closeResultModal which redirects)
+    if (resultModal) {
+        resultModal.classList.add('hidden');
+    }
     
     // Open processing modal with blur preview
     if (!processingModal) {
