@@ -467,6 +467,9 @@ function updateChecklistByElapsed(elapsed) {
 }
 
 // Show "son kontrol" spinner when waiting for backend
+// SVG spinner as data URI (guaranteed to work, renders as image)
+const SPINNER_SVG_DATA = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cstyle%3E.spinner%7Banimation:spin 1s linear infinite;transform-origin:center%7D@keyframes spin%7Bto%7Btransform:rotate(360deg)%7D%7D%3C/style%3E%3Ccircle class='spinner' cx='12' cy='12' r='10' fill='none' stroke='%232563eb' stroke-width='3' stroke-linecap='round' stroke-dasharray='31.4 31.4'/%3E%3C/svg%3E`;
+
 function showFinalCheckSpinner() {
     const progressSteps = document.getElementById('progressSteps');
     if (!progressSteps) return;
@@ -476,7 +479,7 @@ function showFinalCheckSpinner() {
     
     const spinnerDiv = document.createElement('div');
     spinnerDiv.id = 'finalCheckSpinner';
-    // Use inline styles - guaranteed to work, no CSS dependency
+    // Use inline styles - guaranteed to work
     spinnerDiv.style.display = 'flex';
     spinnerDiv.style.alignItems = 'center';
     spinnerDiv.style.gap = '12px';
@@ -484,52 +487,16 @@ function showFinalCheckSpinner() {
     spinnerDiv.style.paddingTop = '16px';
     spinnerDiv.style.borderTop = '1px solid #e2e8f0';
     
+    // Use SVG as image - animation is embedded in SVG itself
     spinnerDiv.innerHTML = `
-        <svg id="finalCheckSpinnerSvg" width="24" height="24" viewBox="0 0 50 50" role="status" aria-label="Yükleniyor" style="flex-shrink: 0;">
-            <circle cx="25" cy="25" r="20" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-dasharray="90 200" stroke-dashoffset="0"></circle>
-        </svg>
+        <img src="${SPINNER_SVG_DATA}" width="24" height="24" alt="Yükleniyor" style="flex-shrink: 0;">
         <span style="font-weight: 500; color: #2563eb;">Son kontrol yapılıyor...</span>
     `;
     
     progressSteps.appendChild(spinnerDiv);
-    
-    // Start animation using Web Animations API (no CSS required!)
-    startSpinnerAnimation();
-}
-
-function startSpinnerAnimation() {
-    const svg = document.getElementById('finalCheckSpinnerSvg');
-    if (!svg) return;
-    
-    // Prevent double animations
-    if (svg.__spinnerAnim) return;
-    
-    svg.style.transformOrigin = '50% 50%';
-    
-    // Web Animations API - works without any CSS keyframes
-    svg.__spinnerAnim = svg.animate(
-        [
-            { transform: 'rotate(0deg)' },
-            { transform: 'rotate(360deg)' }
-        ],
-        {
-            duration: 1000,
-            iterations: Infinity,
-            easing: 'linear'
-        }
-    );
-}
-
-function stopSpinnerAnimation() {
-    const svg = document.getElementById('finalCheckSpinnerSvg');
-    if (svg && svg.__spinnerAnim) {
-        svg.__spinnerAnim.cancel();
-        svg.__spinnerAnim = null;
-    }
 }
 
 function removeFinalCheckSpinner() {
-    stopSpinnerAnimation();
     const spinner = document.getElementById('finalCheckSpinner');
     if (spinner) {
         spinner.remove();
