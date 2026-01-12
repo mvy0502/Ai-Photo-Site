@@ -476,21 +476,60 @@ function showFinalCheckSpinner() {
     
     const spinnerDiv = document.createElement('div');
     spinnerDiv.id = 'finalCheckSpinner';
-    spinnerDiv.className = 'flex items-center gap-4 mt-4 pt-4 border-t border-slate-100';
+    // Use inline styles - guaranteed to work, no CSS dependency
+    spinnerDiv.style.display = 'flex';
+    spinnerDiv.style.alignItems = 'center';
+    spinnerDiv.style.gap = '12px';
+    spinnerDiv.style.marginTop = '16px';
+    spinnerDiv.style.paddingTop = '16px';
+    spinnerDiv.style.borderTop = '1px solid #e2e8f0';
+    
     spinnerDiv.innerHTML = `
-        <div class="flex-shrink-0">
-            <svg class="spinner-rotate text-blue-600" width="24" height="24" viewBox="0 0 50 50" role="status" aria-label="Yükleniyor">
-                <circle cx="25" cy="25" r="20" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-dasharray="90 200" stroke-dashoffset="0"></circle>
-            </svg>
-        </div>
-        <div class="flex-1">
-            <p class="font-medium text-blue-600">Son kontrol yapılıyor...</p>
-        </div>
+        <svg id="finalCheckSpinnerSvg" width="24" height="24" viewBox="0 0 50 50" role="status" aria-label="Yükleniyor" style="flex-shrink: 0;">
+            <circle cx="25" cy="25" r="20" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-dasharray="90 200" stroke-dashoffset="0"></circle>
+        </svg>
+        <span style="font-weight: 500; color: #2563eb;">Son kontrol yapılıyor...</span>
     `;
+    
     progressSteps.appendChild(spinnerDiv);
+    
+    // Start animation using Web Animations API (no CSS required!)
+    startSpinnerAnimation();
+}
+
+function startSpinnerAnimation() {
+    const svg = document.getElementById('finalCheckSpinnerSvg');
+    if (!svg) return;
+    
+    // Prevent double animations
+    if (svg.__spinnerAnim) return;
+    
+    svg.style.transformOrigin = '50% 50%';
+    
+    // Web Animations API - works without any CSS keyframes
+    svg.__spinnerAnim = svg.animate(
+        [
+            { transform: 'rotate(0deg)' },
+            { transform: 'rotate(360deg)' }
+        ],
+        {
+            duration: 1000,
+            iterations: Infinity,
+            easing: 'linear'
+        }
+    );
+}
+
+function stopSpinnerAnimation() {
+    const svg = document.getElementById('finalCheckSpinnerSvg');
+    if (svg && svg.__spinnerAnim) {
+        svg.__spinnerAnim.cancel();
+        svg.__spinnerAnim = null;
+    }
 }
 
 function removeFinalCheckSpinner() {
+    stopSpinnerAnimation();
     const spinner = document.getElementById('finalCheckSpinner');
     if (spinner) {
         spinner.remove();
