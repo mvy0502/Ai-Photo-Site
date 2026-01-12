@@ -12,6 +12,33 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
+        
+        /* Guaranteed spinner animation (works without Tailwind JIT) */
+        .spin {
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Material-like SVG spinner */
+        .spinner-svg {
+            width: 24px;
+            height: 24px;
+        }
+        .spinner-circle {
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 3;
+            stroke-linecap: round;
+            transform-origin: 50% 50%;
+            animation: spin 1.2s linear infinite, dash 1.5s ease-in-out infinite;
+        }
+        @keyframes dash {
+            0%   { stroke-dasharray: 1, 200;   stroke-dashoffset: 0; }
+            50%  { stroke-dasharray: 90, 200;  stroke-dashoffset: -35; }
+            100% { stroke-dasharray: 1, 200;   stroke-dashoffset: -125; }
+        }
     </style>
 </head>
 <body class="bg-white min-h-screen">
