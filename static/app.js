@@ -467,8 +467,8 @@ function updateChecklistByElapsed(elapsed) {
 }
 
 // Show "son kontrol" spinner when waiting for backend
-// SVG spinner as data URI (guaranteed to work, renders as image)
-const SPINNER_SVG_DATA = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cstyle%3E.spinner%7Banimation:spin 1s linear infinite;transform-origin:center%7D@keyframes spin%7Bto%7Btransform:rotate(360deg)%7D%7D%3C/style%3E%3Ccircle class='spinner' cx='12' cy='12' r='10' fill='none' stroke='%232563eb' stroke-width='3' stroke-linecap='round' stroke-dasharray='31.4 31.4'/%3E%3C/svg%3E`;
+// Animated GIF spinner (blue, 24x24) - base64 encoded, guaranteed to animate
+const SPINNER_GIF_BASE64 = 'data:image/gif;base64,R0lGODlhGAAYAPQAAP///wAAAM7Ozvr6+uDg4LCwsOjo6I6OssijqEoAABYWFvz8/PTw8PDw8P77+/Hx8fPz8/Xt7fTy8vn5+evr6/b29ra2tv///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQJCQAaACwAAAAAGAAYAAAFdqAmjmRpnmh6AMDgvnAsz3Rt33iu73xPAMBgcEgsBo3IJNKoXDJlqKh0Sq1ar9jnqMvter+fgDdMHpfNELR6rWYX3vB4PE1fv+n7/p4N1/v9fVMBgoOEhYV/iIl9i4x/jo+AkZJ8lJV4l5hzmptunZ5nn6BgoaIbIQAh+QQJCQAbACwAAAAAGAAYAAAFe6AmjmRpnmh6AMDgvnAsz3Rt33iu73xPJLTbDYfBIPFoRCaVSxdMOh0+q9ar9ooddbvcrie8HY/JZbOXjE6r16e2u/1OI+bzeV2u18teleD//4B7goN4hYZ0iIlvjY5llZaJhpOXm4+Zn52SmqOgnaGmpKiqpaytrxshACH5BAkJABoALAAAAAAYABgAAAV2oCaOZGmeaHoAwOC+cCzPdG3feK7vfE8AwGBwSDwij0ik0ujcJKfUarWJNVqx2mxoOyp7vV4I+EsijctkjnrNZnfe8Lgbnq/bvXc+v98Pe4GCd4SFcoeIbYqLZpGSiISPk5ePl5mbj52fn5Cho6GlpqSnqasaIQAh+QQJCQAbACwAAAAAGAAYAAAFe6AmjmRpnmh6AsHgvnAsz3Rt33iu73zvJ7QbDocVIY9IpLKoVL6k0+kzarVar6Ou1+vlfsFg8Zhs3qTT6vV5zW6717B4fFaW0+t2cXHv/++DgH2Cg3qFhnaIiXGLjGuPkGSWlomQk5edj5mbnZOfnqKfoKSlp6ioqqysGSEAIfkECQkAGgAsAAAAABgAGAAABXagJo5kaZ5omgDA4L5wLM90bd94ru98TwDAYHBIPCKPSqTS6NQkp9SqNYo1WrFa7Gg7Knu93gj4SxqNy2SOes1md97wuBuer9u9dz6/3w97gYJ3hIVyh4htioxmkZKIhI+Tl4+XmZuPnZ+fkKGjoaWmpKeoqxohACH5BAkJABsALAAAAAAYABgAAAV7oCaOZGmeaHoCweC+cCzPdG3feK7vfO8ntBsOhxUhj0ikUqlUvqTT6TNqtVqvo67X6+V+wWDxmGzepNPq9XnNbrvXsHh8VpbT63Zxce//74OAfYKDeoWGdoiJcYuMa4+QZJaWiZCTl52PmZudko+mfqhvoH2ifaWnqRkhACH5BAkJABoALAAAAAAYABgAAAV2oCaOZGmeaJoAwOC+cCzPdG3feK7vfE8AwGBwSCwakcmksqhcMmWoqHRKrVqv2OeoG+16v1+AN0wel80QtHqtZhfe8Hg8TV+/6fv+ng3X+/19UwGCg4SFhX+IiX2LjH+Oj4CRknyUlXiXmHOam26dnmefgGChohshADs=';
 
 function showFinalCheckSpinner() {
     const progressSteps = document.getElementById('progressSteps');
@@ -487,9 +487,9 @@ function showFinalCheckSpinner() {
     spinnerDiv.style.paddingTop = '16px';
     spinnerDiv.style.borderTop = '1px solid #e2e8f0';
     
-    // Use SVG as image - animation is embedded in SVG itself
+    // Use animated GIF - guaranteed to animate, no CSS/JS needed
     spinnerDiv.innerHTML = `
-        <img src="${SPINNER_SVG_DATA}" width="24" height="24" alt="Yükleniyor" style="flex-shrink: 0;">
+        <img src="${SPINNER_GIF_BASE64}" width="24" height="24" alt="Yükleniyor" style="flex-shrink: 0;">
         <span style="font-weight: 500; color: #2563eb;">Son kontrol yapılıyor...</span>
     `;
     
