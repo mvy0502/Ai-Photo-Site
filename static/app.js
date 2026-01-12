@@ -1822,7 +1822,7 @@ function showValidationResultScreen(jobData, previewUrl) {
             console.log('[Validation] Proceed button clicked, disabled:', proceedBtn.disabled);
             if (proceedBtn.disabled) return;
             
-            // Show processing state on button briefly
+            // Show loading state on button
             proceedBtn.disabled = true;
             proceedBtn.innerHTML = `
                 <svg class="w-5 h-5 animate-spin inline-block mr-2" fill="none" viewBox="0 0 24 24">
@@ -1832,8 +1832,8 @@ function showValidationResultScreen(jobData, previewUrl) {
                 İşleniyor...
             `;
             
-            // IMPORTANT: Start Step 2 (processing animation) with blur preview
-            startStep2ProcessingWithBlur(currentJobId, acknowledgedIssueIds, previewUrl);
+            // DIRECT TO CHECKOUT: No scan animation, just process and go to checkout
+            processAndGoToCheckout(currentJobId, acknowledgedIssueIds);
         });
     }
     
@@ -1882,80 +1882,8 @@ function showValidationResultScreen(jobData, previewUrl) {
                 İşleniyor...
             `;
             
-            // DIRECT TRANSITION: Hide result modal, show processing modal
-            if (resultModal) {
-                resultModal.classList.add('hidden');
-            }
-            
-            // Show processing modal directly
-            if (processingModal) {
-                // Reset states
-                scanMinDone = false;
-                jobDone = false;
-                step2BackendDone = false;
-                processingStart = Date.now();
-                
-                // Reset step states
-                stepStates = {};
-                processingSteps.forEach(step => {
-                    stepStates[step.key] = "pending";
-                });
-                
-                // Show modal
-                processingModal.classList.remove('hidden');
-                
-                // Set preview (blurred)
-                const previewImage = document.getElementById('previewImage');
-                if (previewImage && previewUrl) {
-                    previewImage.src = previewUrl;
-                    previewImage.style.filter = 'blur(10px)';
-                    previewImage.style.transform = 'scale(1.02)';
-                }
-                
-                // Start animations
-                setOverlayMode("processing");
-                startScanLoop();
-                renderProcessingSteps();
-                
-                // Start UI timer
-                if (uiTimer) clearInterval(uiTimer);
-                uiTimer = setInterval(() => {
-                    const elapsed = Date.now() - processingStart;
-                    updateChecklistByElapsed(elapsed);
-                    
-                    // Check transition
-                    if (scanMinDone && step2BackendDone) {
-                        clearInterval(uiTimer);
-                        uiTimer = null;
-                        stopScanLoop();
-                        closeProcessingModal();
-                        if (step2ProcessedUrl) {
-                            showProcessedResult(currentJobId, step2ProcessedUrl);
-                        } else {
-                            alert('Fotoğraf işlenirken bir hata oluştu.');
-                            window.location.href = '/';
-                        }
-                    }
-                }, 100);
-                
-                // Start backend request
-                fetch(`/process/${currentJobId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ acknowledged_issue_ids: acknowledgedIssueIds })
-                })
-                .then(res => res.json())
-                .then(data => {
-                    console.log('[GlassesBtn] Backend response:', data);
-                    step2BackendDone = true;
-                    step2ProcessedUrl = data.job?.processed_url || data.job?.preview_url || `/api/preview/${currentJobId}`;
-                })
-                .catch(err => {
-                    console.error('[GlassesBtn] Error:', err);
-                    step2BackendDone = true;
-                    step2ProcessedUrl = null;
-                });
-            }
+            // DIRECT TO CHECKOUT: No scan animation, just process and go to checkout
+            processAndGoToCheckout(currentJobId, acknowledgedIssueIds);
         });
     }
     
@@ -1963,7 +1891,63 @@ function showValidationResultScreen(jobData, previewUrl) {
 }
 
 // ============================================================================
-// Step 2 Processing with Blur Preview (from validation screen)
+// Direct Process and Go to Checkout (NO scan animation)
+// ============================================================================
+async function processAndGoToCheckout(jobId, acknowledgedIds) {
+    console.log('[Checkout] Processing and going directly to checkout for job:', jobId);
+    
+    // Hide validation result modal
+    if (resultModal) {
+        resultModal.classList.add('hidden');
+    }
+    
+    // Show a simple loading overlay (optional - can be removed if too slow)
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.id = 'checkoutLoadingOverlay';
+    loadingOverlay.className = 'fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50';
+    loadingOverlay.innerHTML = `
+        <div class="bg-white rounded-2xl p-8 shadow-2xl text-center">
+            <svg class="w-12 h-12 animate-spin text-emerald-600 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="text-slate-700 font-medium">Fotoğraf hazırlanıyor...</p>
+        </div>
+    `;
+    document.body.appendChild(loadingOverlay);
+    
+    try {
+        // Call backend to process photo
+        const response = await fetch(`/process/${jobId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ acknowledged_issue_ids: acknowledgedIds || [] })
+        });
+        
+        const data = await response.json();
+        console.log('[Checkout] Backend response:', data);
+        
+        // Remove loading overlay
+        loadingOverlay.remove();
+        
+        if (data.success) {
+            const processedUrl = data.job?.processed_url || data.job?.preview_url || `/api/preview/${jobId}`;
+            // Go directly to checkout page
+            showProcessedResult(jobId, processedUrl);
+        } else {
+            alert(data.error || 'Fotoğraf işlenirken bir hata oluştu');
+            window.location.href = '/';
+        }
+    } catch (error) {
+        console.error('[Checkout] Error:', error);
+        loadingOverlay.remove();
+        alert('Bir hata oluştu. Lütfen tekrar deneyin.');
+        window.location.href = '/';
+    }
+}
+
+// ============================================================================
+// Step 2 Processing with Blur Preview (from validation screen) - DEPRECATED
 // ============================================================================
 // State for Step 2 -> Step 3 transition
 let step2StartTime = null;
