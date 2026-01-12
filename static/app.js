@@ -467,14 +467,14 @@ function updateChecklistByElapsed(elapsed) {
 }
 
 // Show "son kontrol" spinner when waiting for backend
-// Animated GIF spinner (blue, 24x24) - base64 encoded, guaranteed to animate
-const SPINNER_GIF_BASE64 = 'data:image/gif;base64,R0lGODlhGAAYAPQAAP///wAAAM7Ozvr6+uDg4LCwsOjo6I6OssijqEoAABYWFvz8/PTw8PDw8P77+/Hx8fPz8/Xt7fTy8vn5+evr6/b29ra2tv///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQJCQAaACwAAAAAGAAYAAAFdqAmjmRpnmh6AMDgvnAsz3Rt33iu73xPAMBgcEgsBo3IJNKoXDJlqKh0Sq1ar9jnqMvter+fgDdMHpfNELR6rWYX3vB4PE1fv+n7/p4N1/v9fVMBgoOEhYV/iIl9i4x/jo+AkZJ8lJV4l5hzmptunZ5nn6BgoaIbIQAh+QQJCQAbACwAAAAAGAAYAAAFe6AmjmRpnmh6AMDgvnAsz3Rt33iu73xPJLTbDYfBIPFoRCaVSxdMOh0+q9ar9ooddbvcrie8HY/JZbOXjE6r16e2u/1OI+bzeV2u18teleD//4B7goN4hYZ0iIlvjY5llZaJhpOXm4+Zn52SmqOgnaGmpKiqpaytrxshACH5BAkJABoALAAAAAAYABgAAAV2oCaOZGmeaHoAwOC+cCzPdG3feK7vfE8AwGBwSDwij0ik0ujcJKfUarWJNVqx2mxoOyp7vV4I+EsijctkjnrNZnfe8Lgbnq/bvXc+v98Pe4GCd4SFcoeIbYqLZpGSiISPk5ePl5mbj52fn5Cho6GlpqSnqasaIQAh+QQJCQAbACwAAAAAGAAYAAAFe6AmjmRpnmh6AsHgvnAsz3Rt33iu73zvJ7QbDocVIY9IpLKoVL6k0+kzarVar6Ou1+vlfsFg8Zhs3qTT6vV5zW6717B4fFaW0+t2cXHv/++DgH2Cg3qFhnaIiXGLjGuPkGSWlomQk5edj5mbnZOfnqKfoKSlp6ioqqysGSEAIfkECQkAGgAsAAAAABgAGAAABXagJo5kaZ5omgDA4L5wLM90bd94ru98TwDAYHBIPCKPSqTS6NQkp9SqNYo1WrFa7Gg7Knu93gj4SxqNy2SOes1md97wuBuer9u9dz6/3w97gYJ3hIVyh4htioxmkZKIhI+Tl4+XmZuPnZ+fkKGjoaWmpKeoqxohACH5BAkJABsALAAAAAAYABgAAAV7oCaOZGmeaHoCweC+cCzPdG3feK7vfO8ntBsOhxUhj0ikUqlUvqTT6TNqtVqvo67X6+V+wWDxmGzepNPq9XnNbrvXsHh8VpbT63Zxce//74OAfYKDeoWGdoiJcYuMa4+QZJaWiZCTl52PmZudko+mfqhvoH2ifaWnqRkhACH5BAkJABoALAAAAAAYABgAAAV2oCaOZGmeaJoAwOC+cCzPdG3feK7vfE8AwGBwSCwakcmksqhcMmWoqHRKrVqv2OeoG+16v1+AN0wel80QtHqtZhfe8Hg8TV+/6fv+ng3X+/19UwGCg4SFhX+IiX2LjH+Oj4CRknyUlXiXmHOam26dnmefgGChohshADs=';
+// Dots animation interval reference
+let dotsAnimationInterval = null;
 
 function showFinalCheckSpinner() {
     const progressSteps = document.getElementById('progressSteps');
     if (!progressSteps) return;
     
-    // Check if spinner already exists
+    // Check if already exists
     if (document.getElementById('finalCheckSpinner')) return;
     
     const spinnerDiv = document.createElement('div');
@@ -482,21 +482,50 @@ function showFinalCheckSpinner() {
     // Use inline styles - guaranteed to work
     spinnerDiv.style.display = 'flex';
     spinnerDiv.style.alignItems = 'center';
-    spinnerDiv.style.gap = '12px';
+    spinnerDiv.style.gap = '8px';
     spinnerDiv.style.marginTop = '16px';
     spinnerDiv.style.paddingTop = '16px';
     spinnerDiv.style.borderTop = '1px solid #e2e8f0';
     
-    // Use animated GIF - guaranteed to animate, no CSS/JS needed
+    // Simple text with animated dots - NO spinner needed
     spinnerDiv.innerHTML = `
-        <img src="${SPINNER_GIF_BASE64}" width="24" height="24" alt="Yükleniyor" style="flex-shrink: 0;">
-        <span style="font-weight: 500; color: #2563eb;">Son kontrol yapılıyor...</span>
+        <span id="finalCheckText" style="font-weight: 500; color: #2563eb;">Son kontrol yapılıyor</span>
+        <span id="finalCheckDots" style="font-weight: 500; color: #2563eb; width: 20px; text-align: left;"></span>
     `;
     
     progressSteps.appendChild(spinnerDiv);
+    
+    // Start dots animation
+    startDotsAnimation();
+}
+
+function startDotsAnimation() {
+    const dotsEl = document.getElementById('finalCheckDots');
+    if (!dotsEl) return;
+    
+    let dotCount = 0;
+    
+    // Clear any existing interval
+    if (dotsAnimationInterval) {
+        clearInterval(dotsAnimationInterval);
+    }
+    
+    // Animate dots: "" -> "." -> ".." -> "..." -> "" (loop)
+    dotsAnimationInterval = setInterval(() => {
+        dotCount = (dotCount + 1) % 4;
+        dotsEl.textContent = '.'.repeat(dotCount);
+    }, 400);
+}
+
+function stopDotsAnimation() {
+    if (dotsAnimationInterval) {
+        clearInterval(dotsAnimationInterval);
+        dotsAnimationInterval = null;
+    }
 }
 
 function removeFinalCheckSpinner() {
+    stopDotsAnimation();
     const spinner = document.getElementById('finalCheckSpinner');
     if (spinner) {
         spinner.remove();
