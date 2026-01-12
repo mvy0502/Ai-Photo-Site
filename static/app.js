@@ -1691,6 +1691,13 @@ function showValidationResultScreen(jobData, previewUrl) {
                                     <input type="checkbox" class="validation-ack-checkbox mt-0.5 w-4 h-4 text-amber-600 rounded" data-issue-id="${issue.id}">
                                     <span class="text-sm text-amber-800">Riski anladım ve devam etmek istiyorum.</span>
                                 </label>
+                                <!-- GLASSES CONTINUE BUTTON - appears when checkbox is checked -->
+                                <button id="glassesAckContinueBtn" class="hidden mt-4 w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                    </svg>
+                                    Devam Et
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -1846,8 +1853,111 @@ function showValidationResultScreen(jobData, previewUrl) {
             
             // Update button state
             updateProceedButtonState();
+            
+            // Show/hide glasses continue button
+            const glassesBtn = document.getElementById('glassesAckContinueBtn');
+            if (glassesBtn) {
+                if (e.target.checked) {
+                    glassesBtn.classList.remove('hidden');
+                } else {
+                    glassesBtn.classList.add('hidden');
+                }
+            }
         });
     });
+    
+    // Handle glasses acknowledge continue button (alternative to main proceed button)
+    const glassesAckBtn = document.getElementById('glassesAckContinueBtn');
+    if (glassesAckBtn) {
+        glassesAckBtn.addEventListener('click', () => {
+            console.log('[Validation] Glasses acknowledge button clicked');
+            
+            // Disable button and show loading
+            glassesAckBtn.disabled = true;
+            glassesAckBtn.innerHTML = `
+                <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                İşleniyor...
+            `;
+            
+            // DIRECT TRANSITION: Hide result modal, show processing modal
+            if (resultModal) {
+                resultModal.classList.add('hidden');
+            }
+            
+            // Show processing modal directly
+            if (processingModal) {
+                // Reset states
+                scanMinDone = false;
+                jobDone = false;
+                step2BackendDone = false;
+                processingStart = Date.now();
+                
+                // Reset step states
+                stepStates = {};
+                processingSteps.forEach(step => {
+                    stepStates[step.key] = "pending";
+                });
+                
+                // Show modal
+                processingModal.classList.remove('hidden');
+                
+                // Set preview (blurred)
+                const previewImage = document.getElementById('previewImage');
+                if (previewImage && previewUrl) {
+                    previewImage.src = previewUrl;
+                    previewImage.style.filter = 'blur(10px)';
+                    previewImage.style.transform = 'scale(1.02)';
+                }
+                
+                // Start animations
+                setOverlayMode("processing");
+                startScanLoop();
+                renderProcessingSteps();
+                
+                // Start UI timer
+                if (uiTimer) clearInterval(uiTimer);
+                uiTimer = setInterval(() => {
+                    const elapsed = Date.now() - processingStart;
+                    updateChecklistByElapsed(elapsed);
+                    
+                    // Check transition
+                    if (scanMinDone && step2BackendDone) {
+                        clearInterval(uiTimer);
+                        uiTimer = null;
+                        stopScanLoop();
+                        closeProcessingModal();
+                        if (step2ProcessedUrl) {
+                            showProcessedResult(currentJobId, step2ProcessedUrl);
+                        } else {
+                            alert('Fotoğraf işlenirken bir hata oluştu.');
+                            window.location.href = '/';
+                        }
+                    }
+                }, 100);
+                
+                // Start backend request
+                fetch(`/process/${currentJobId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ acknowledged_issue_ids: acknowledgedIssueIds })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    console.log('[GlassesBtn] Backend response:', data);
+                    step2BackendDone = true;
+                    step2ProcessedUrl = data.job?.processed_url || data.job?.preview_url || `/api/preview/${currentJobId}`;
+                })
+                .catch(err => {
+                    console.error('[GlassesBtn] Error:', err);
+                    step2BackendDone = true;
+                    step2ProcessedUrl = null;
+                });
+            }
+        });
+    }
     
     resultModal.classList.remove('hidden');
 }
